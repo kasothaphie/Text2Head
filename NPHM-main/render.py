@@ -36,8 +36,11 @@ def sphere_trace(sdf, camera_position, norm_directions, max_length):
     total_distances = torch.zeros(N)
     last_distances = torch.ones(N)
     
-    for _ in range(50):
-        mask = torch.logical_and(total_distances < max_length, last_distances > 0.01)
+    for _ in range(20):
+        #mask = torch.logical_and(total_distances < max_length, last_distances > 1e-3)
+        not_reached_max_distance = total_distances < max_length
+        not_hit_target = torch.abs(last_distances) > 1e-3
+        mask = torch.logical_and(not_reached_max_distance, not_hit_target)
         if torch.all(torch.logical_not(mask)):
             break
         distances = sdf(positions[mask])
