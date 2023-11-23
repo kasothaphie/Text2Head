@@ -88,7 +88,7 @@ def sphere_trace(sdf, camera_position, norm_directions, max_length):
     return positions, total_distances < max_length
 
 
-def render(sdf, pu, pv, camera_distance, camera_angle, ambient_coeff, diffuse_coeff, specular_coeff, shininess,
+def render(decoder_shape, lat_rep, pu, pv, camera_distance, camera_angle, ambient_coeff, diffuse_coeff, specular_coeff, shininess,
            focal_length, max_ray_length=4.):
     '''
 
@@ -110,6 +110,12 @@ def render(sdf, pu, pv, camera_distance, camera_angle, ambient_coeff, diffuse_co
     -------
 
     '''
+    def sdf(positions):
+        nphm_input = torch.reshape(positions, (1, -1, 3))
+        distance, _ = decoder_shape(nphm_input, torch.reshape(lat_rep, (1, 1, -1)), None)
+        return distance.squeeze()
+    
+    
     object_color = torch.tensor([0.61, 0.61, 0.61])
     background_color = torch.tensor([0.15, 0, 0])
 
