@@ -1,5 +1,5 @@
 import torch
-
+import numpy as np
 
 def phong_model(sdf, points, camera_position, ambient_coeff, diffuse_coeff, specular_coeff, shininess):
     # define
@@ -88,6 +88,72 @@ def sphere_trace(sdf, camera_position, norm_directions, max_length):
     return positions, total_distances < max_length
 
 
+def acc_sphere_trace(sdf, init_position, norm_directions, max_length, scale=np.sqrt(2.), eps=1e-3, init_t=None):
+    N = norm_directions.shape[0]
+    if init_position.ndim > 1:
+        positions = init_position
+    else:
+        positions = init_position.unsqueeze(dim=0).repeat(N, 1)  # [N, 3]
+    
+    r_last = torch.zeros(N)
+    r_curr = torch.zeros(N)
+    r_next = torch.ones(N)
+    d_curr = torch.zeros(N)
+    if init_t is not None:
+        t = init_t
+    else:
+        t = torch.zeros(N)
+    
+    sdf_calls = torch.zeros(N)
+    
+    for i in range(15):
+        not_reached_max_distance = t < max_length
+        not_hit = torch.abs(r_next) > eps
+        mask = torch.logical_and(not_reached_max_distance, not_hit)
+        if torch.all(torch.logical_not(mask)):
+            break
+        
+        d_curr[mask] = r_curr[mask] + scale * r_curr[mask] * torch.nan_to_num((d_curr[mask] - r_last[mask] + r_curr[mask])/(d_curr[mask] + r_last[mask] - r_curr[mask]))
+        r_next[mask] = sdf(positions[mask] + ((t[mask] + d_curr[mask]) * norm_directions[mask].T).T)
+        
+        normal_tracing_mask = torch.abs(d_curr[mask]) > torch.abs(r_curr[mask]) + torch.abs(r_next[mask])
+        if torch.any(normal_tracing_mask):
+            d_curr[mask][normal_tracing_mask] = r_curr[mask][normal_tracing_mask]
+            r_next[mask][normal_tracing_mask] = sdf(positions[mask][normal_tracing_mask] + ((t[mask][normal_tracing_mask] + d_curr[mask][normal_tracing_mask]) * norm_directions[mask][normal_tracing_mask].T).T)
+            sdf_calls[mask][normal_tracing_mask] += 1
+            
+        
+        t[mask] += d_curr[mask]
+        r_last[mask] = r_curr[mask]
+        r_curr[mask] = r_next[mask]
+        
+        sdf_calls[mask] += 1
+        
+    #hit_mask = torch.logical_and(t < max_length and r_next < eps)
+    hit_mask = t < max_length
+    hits = torch.zeros(N, 3)
+    hits[hit_mask] = positions[hit_mask] + (t[hit_mask] * norm_directions[hit_mask].T).T
+    return hits, hit_mask, sdf_calls, t
+
+def two_phase_tracing(sdf, camera_position, norm_directions, max_length, scale=np.sqrt(2.), eps=1e-3):
+    N = norm_directions.shape[0]
+    with torch.no_grad():
+        hits_1, hit_mask_1, sdf_calls_1, t_1 = acc_sphere_trace(sdf, camera_position, norm_directions, max_length, scale=2., eps=0.025)
+    hits_2, hit_mask_2, sdf_calls_2, t_2 = acc_sphere_trace(sdf, hits_1[hit_mask_1], norm_directions[hit_mask_1], 3., scale=np.sqrt(2.), eps=0.005)
+    
+    hit_mask = torch.zeros(N).bool()
+    hit_mask[hit_mask_1] = hit_mask_2
+    
+    hits = torch.zeros(N, 3)
+    hits[hit_mask] = hits_2[hit_mask_2]
+    
+    with torch.no_grad():
+        sdf_calls = torch.zeros_like(sdf_calls_1)
+        sdf_calls[hit_mask_1] += sdf_calls_2
+    
+    return hits, hit_mask
+
+
 def render(decoder_shape, lat_rep, pu, pv, camera_distance, camera_angle, ambient_coeff, diffuse_coeff, specular_coeff, shininess,
            focal_length, max_ray_length=4.):
     '''
@@ -110,10 +176,21 @@ def render(decoder_shape, lat_rep, pu, pv, camera_distance, camera_angle, ambien
     -------
 
     '''
-    def sdf(positions):
+    def sdf(positions, max_number=10000):
         nphm_input = torch.reshape(positions, (1, -1, 3))
-        distance, _ = decoder_shape(nphm_input, torch.reshape(lat_rep, (1, 1, -1)), None)
-        return distance.squeeze()
+        
+        lat_rep_in = torch.reshape(lat_rep, (1, 1, -1))
+        
+        if nphm_input.shape[1] > max_number:
+            chunked = torch.split(nphm_input, max_number, dim=1)
+            distances = []
+            for chunk in chunked:
+                distance, _ = decoder_shape(chunk, lat_rep_in, None)
+                distances.append(distance)
+            return torch.cat(distances, dim=1).squeeze()
+        else:
+            distance, _ = decoder_shape(nphm_input, lat_rep_in, None)
+            return distance.squeeze()
     
     
     object_color = torch.tensor([0.61, 0.61, 0.61])
@@ -144,7 +221,7 @@ def render(decoder_shape, lat_rep, pu, pv, camera_distance, camera_angle, ambien
     directions = (transposed_directions / transposed_directions.norm(dim=0)).T  # [pu*pv, 3]
 
     # Perform sphere tracing
-    hit_positions, hit_mask = sphere_trace(sdf, camera_position, directions, max_ray_length)
+    hit_positions, hit_mask = two_phase_tracing(sdf, camera_position, directions, max_ray_length)
 
     # Color the pixel based on whether the ray hits an object
     reflections = phong_model(sdf, hit_positions[hit_mask], camera_position, ambient_coeff, diffuse_coeff,

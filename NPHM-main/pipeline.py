@@ -66,22 +66,25 @@ def forward(lat_rep, prompt, render_config):
     
     prompt_tokenized = clip.tokenize(prompt).to(device)
     
-    return model(image_preprocessed, prompt_tokenized)[0]
+    return model(image_preprocessed, prompt_tokenized)[0], torch.clone(image)
 
-def get_latent_from_text(prompt, n_updates=10):
-    lat_mean, lat_std = get_latent_mean_std()
-    lat_rep = (torch.randn(lat_mean.shape) * lat_std * 0.85 + lat_mean).detach().requires_grad_(True)
+def get_latent_from_text(prompt, init_lat=None, n_updates=10):
+    if init_lat is None:
+        lat_mean, lat_std = get_latent_mean_std()
+        lat_rep = (torch.randn(lat_mean.shape) * lat_std * 0.85 + lat_mean).detach().requires_grad_(True)
+    else:
+        lat_rep = init_lat.requires_grad_(True)
     
     optimizer = Adam(params=[lat_rep],
-                 lr=0.001, 
+                 lr=0.003, 
                  maximize=True)
     
-    res = 70
+    res = 100
     render_config = {
         "pu": res,
         "pv": res,
         "camera_distance": 2.,
-        "camera_angle": 0.,
+        "camera_angle": 20.,
         "ambient_coeff": 0.1,
         "diffuse_coeff": 0.6,
         "specular_coeff": 0.3,
@@ -91,16 +94,24 @@ def get_latent_from_text(prompt, n_updates=10):
 
     scores = []
     latents = []
+    images = []
     for n in range(n_updates):
         optimizer.zero_grad()
-        score = forward(lat_rep, prompt, render_config)
+        score, image = forward(lat_rep, prompt, render_config)
         scores.append(score.detach())
         latents.append(torch.clone(lat_rep))
+        images.append(image)
         score.backward()
         print(f"update step {n} - score: {score}")
         optimizer.step()
         
-    return lat_rep.detach(), scores, latents
+    stats = {
+        "scores": scores,
+        "latents": latents,
+        "images": images
+    }
+        
+    return lat_rep.detach(), stats
     
     
     
