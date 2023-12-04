@@ -46,7 +46,7 @@ decoder_shape.load_state_dict(checkpoint['decoder_state_dict'], strict=True)
 
 #from clip preprocessing
 clip_tensor_preprocessor = Compose([
-    Resize(224, interpolation=InterpolationMode.BICUBIC),
+    Resize(224, interpolation=InterpolationMode.BICUBIC, antialias=None),
     CenterCrop(224),
     Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
 ])
@@ -56,51 +56,79 @@ def get_latent_mean_std():
     lat_std = torch.from_numpy(np.load(env_paths.ASSETS + 'nphm_lat_std.npy'))
     return lat_mean, lat_std
 
-def forward(lat_rep, prompt, render_config):
-    image = render(decoder_shape=decoder_shape,
-           lat_rep=lat_rep,
-           **render_config)
-    
+def forward(lat_rep, prompt, camera_params, phong_params, light_params):
+    image = render(decoder_shape, lat_rep, camera_params, phong_params, light_params)
+
     image_c_first = image.permute(2, 0, 1)
     image_preprocessed = clip_tensor_preprocessor(image_c_first).unsqueeze(0)
-    
-    prompt_tokenized = clip.tokenize(prompt).to(device)
-    
-    return model(image_preprocessed, prompt_tokenized)[0]
 
-def get_latent_from_text(prompt, n_updates=10):
-    lat_mean, lat_std = get_latent_mean_std()
-    lat_rep = (torch.randn(lat_mean.shape) * lat_std * 0.85 + lat_mean).detach().requires_grad_(True)
-    
+    prompt_tokenized = clip.tokenize(prompt).to(device)
+
+    return model(image_preprocessed, prompt_tokenized)[0], torch.clone(image)
+
+
+def get_latent_from_text(prompt, init_lat=None, n_updates=10):
+    if init_lat is None:
+        lat_mean, lat_std = get_latent_mean_std()
+        lat_rep = (torch.randn(lat_mean.shape) * lat_std * 0.85 + lat_mean).detach().requires_grad_(True)
+    else:
+        lat_rep = init_lat.requires_grad_(True)
+
     optimizer = Adam(params=[lat_rep],
-                 lr=0.001, 
-                 maximize=True)
-    
-    res = 70
-    render_config = {
-        "pu": res,
-        "pv": res,
-        "camera_distance": 2.,
-        "camera_angle": 0.,
-        "ambient_coeff": 0.1,
-        "diffuse_coeff": 0.6,
-        "specular_coeff": 0.3,
-        "shininess": 32.,
-        "focal_length": 3.
+                     lr=0.003,
+                     maximize=True)
+
+    camera_params = {
+        "camera_distance": 1.42,
+        "camera_angle": 55.,
+        "focal_length": 3.15,
+        "max_ray_length": (0.5 + 1) * 3.15 + 1.5,
+        # Image
+        "resolution_y": 100,
+        "resolution_x": 100
+    }
+    phong_params = {
+        "ambient_coeff": 0.67,
+        "diffuse_coeff": 0.79,
+        "specular_coeff": 0.63,
+        "shininess": 1.,
+        # Colors
+        "object_color": torch.tensor([0.63, 0.17, 0.78]),
+        "background_color": torch.tensor([0.35, 0.94, 0.26])
+    }
+
+    light_params = {
+        "amb_light_color": torch.tensor([0.57, 0.07, 0.69]),
+        # light 1
+        "light_intensity_1": 1.1,
+        "light_color_1": torch.tensor([0.88, 0.99, 0.74]),
+        "light_dir_1": torch.tensor([-0.41, -0.51, -0.76]),
+        # light p
+        "light_intensity_p": 0.,
+        "light_color_p": torch.tensor([0.88, 0.99, 0.74]),
+        "light_pos_p": torch.tensor([2., 0., 2.])
     }
 
     scores = []
     latents = []
+    images = []
     for n in range(n_updates):
         optimizer.zero_grad()
-        score = forward(lat_rep, prompt, render_config)
+        score, image = forward(lat_rep, prompt, camera_params, phong_params, light_params)
         scores.append(score.detach())
         latents.append(torch.clone(lat_rep))
+        images.append(image)
         score.backward()
         print(f"update step {n} - score: {score}")
         optimizer.step()
-        
-    return lat_rep.detach(), scores, latents
+
+    stats = {
+        "scores": scores,
+        "latents": latents,
+        "images": images
+    }
+
+    return lat_rep.detach(), stats
     
     
     
