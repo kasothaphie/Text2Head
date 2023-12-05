@@ -78,14 +78,22 @@ def get_latent_from_text(prompt, init_lat=None, n_updates=10):
                      lr=0.003,
                      maximize=True)
 
+    lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode='max',
+        factor=0.1,
+        patience=2,
+        min_lr=0.00001
+    )
+
     camera_params = {
         "camera_distance": 0.25,
         "camera_angle": 45.,
         "focal_length": 1.58,
         "max_ray_length": (0.25 + 1) * 1.58 + 1.5,
         # Image
-        "resolution_y": 150,
-        "resolution_x": 150
+        "resolution_y": 100,
+        "resolution_x": 100
     }
     phong_params = {
         "ambient_coeff": 0.45,
@@ -120,7 +128,12 @@ def get_latent_from_text(prompt, init_lat=None, n_updates=10):
         images.append(image)
         score.backward()
         print(f"update step {n} - score: {score}")
+        #plt.imshow(image.detach().numpy())
+        #plt.axis('off')  # Turn off axes
+        #plt.show()
         optimizer.step()
+        lr_scheduler.step(score)
+        print('lr: ', optimizer.param_groups[0]['lr'])
 
     stats = {
         "scores": scores,
