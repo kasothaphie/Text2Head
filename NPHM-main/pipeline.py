@@ -8,6 +8,9 @@ import os.path as osp
 from NPHM.models.EnsembledDeepSDF import FastEnsembleDeepSDFMirrored
 from NPHM import env_paths
 import matplotlib.pyplot as plt
+from torch.utils.tensorboard import SummaryWriter
+from datetime import datetime
+from tqdm import tqdm
 
 from render import render
 
@@ -67,23 +70,32 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
     return model(image_preprocessed, prompt_tokenized)[0], torch.clone(image)
 
 
-def get_latent_from_text(prompt, init_lat=None, n_updates=10):
+def get_latent_from_text(prompt, init_lat=None):
     if init_lat is None:
         lat_mean, lat_std = get_latent_mean_std()
         lat_rep = (torch.randn(lat_mean.shape) * lat_std * 0.85 + lat_mean).detach().requires_grad_(True)
     else:
         lat_rep = init_lat.requires_grad_(True)
 
+    hparams = {
+        'resolution': 50,
+        'n_iterations': 10,
+        'optimizer_lr': 0.03,
+        'lr_scheduler_factor': 0.1,
+        'lr_scheduler_patience': 2,
+        'lr_scheduler_min_lr': 1e-5
+    }
+
     optimizer = Adam(params=[lat_rep],
-                     lr=0.003,
+                     lr=hparams['optimizer_lr'],
                      maximize=True)
 
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode='max',
-        factor=0.1,
-        patience=2,
-        min_lr=0.00001
+        factor=hparams['lr_scheduler_factor'],
+        patience=hparams['lr_scheduler_patience'],
+        min_lr=hparams['lr_scheduler_min_lr']
     )
 
     camera_params = {
@@ -92,8 +104,8 @@ def get_latent_from_text(prompt, init_lat=None, n_updates=10):
         "focal_length": 1.58,
         "max_ray_length": (0.25 + 1) * 1.58 + 1.5,
         # Image
-        "resolution_y": 100,
-        "resolution_x": 100
+        "resolution_y": hparams['resolution'],
+        "resolution_x": hparams['resolution']
     }
     phong_params = {
         "ambient_coeff": 0.45,
@@ -117,29 +129,38 @@ def get_latent_from_text(prompt, init_lat=None, n_updates=10):
         "light_pos_p": torch.tensor([0., -3.28, 0.56])
     }
 
+    now = datetime.now()
+    writer = SummaryWriter(log_dir=f'runs/identity-pipeline/train-time:{now.strftime("%Y-%m-%d-%H:%M:%S")}')
+
     scores = []
     latents = []
     images = []
-    for n in range(n_updates):
+    for iteration in tqdm(range(hparams['n_iterations'])):
         optimizer.zero_grad()
         score, image = forward(lat_rep, prompt, camera_params, phong_params, light_params)
+
         scores.append(score.detach())
         latents.append(torch.clone(lat_rep))
         images.append(image)
+
         score.backward()
-        print(f"update step {n} - score: {score}")
-        #plt.imshow(image.detach().numpy())
-        #plt.axis('off')  # Turn off axes
-        #plt.show()
+        print(f"update step {iteration+1} - score: {score}")
+ 
         optimizer.step()
         lr_scheduler.step(score)
-        print('lr: ', optimizer.param_groups[0]['lr'])
+
+        writer.add_scalar('CLIP score', score, iteration)
+        writer.add_scalar('learning rate', optimizer.param_groups[0]['lr'], iteration)
+        writer.add_image('rendered_image', image.detach().numpy(), iteration, dataformats='HWC')
 
     stats = {
         "scores": scores,
         "latents": latents,
         "images": images
     }
+
+    writer.add_hparams(hparams, {'Final score': score})
+    writer.close()
 
     return lat_rep.detach(), stats
     
