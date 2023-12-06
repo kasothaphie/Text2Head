@@ -4,6 +4,7 @@ from torch.optim import Adam
 from torchvision.transforms import Compose, Normalize, Resize, CenterCrop, InterpolationMode
 import numpy as np
 import clip
+import os
 import os.path as osp
 from NPHM.models.EnsembledDeepSDF import FastEnsembleDeepSDFMirrored
 from NPHM import env_paths
@@ -11,6 +12,7 @@ import matplotlib.pyplot as plt
 
 from utils.render import render
 
+os.environ['CUDA_VISIBLE_DEVICES'] = 0
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 model, preprocess = clip.load("ViT-B/32", device=device)
