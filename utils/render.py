@@ -51,9 +51,9 @@ def phong_model(sdf, points, camera_position, phong_params, light_params, mesh_p
 
 def estimate_normals(sdf, points, epsilon=1e-3):
     sdf_inputs = torch.concat([points,
-                               points + torch.tensor([epsilon, 0, 0], device=device),
-                               points + torch.tensor([0, epsilon, 0], device=device),
-                               points + torch.tensor([0, 0, epsilon], device=device)])
+                               points + torch.tensor([epsilon, 0, 0]),
+                               points + torch.tensor([0, epsilon, 0]),
+                               points + torch.tensor([0, 0, epsilon])])
 
     sdf_values = sdf(sdf_inputs).reshape(4, -1)
 
@@ -96,16 +96,16 @@ def acc_sphere_trace(sdf, init_position, norm_directions, max_length, scale=np.s
     else:
         positions = init_position.unsqueeze(dim=0).repeat(N, 1)  # [N, 3]
 
-    r_last = torch.zeros(N, device=device)
-    r_curr = torch.zeros(N, device=device)
-    r_next = torch.ones(N, device=device)
-    d_curr = torch.zeros(N, device=device)
+    r_last = torch.zeros(N)
+    r_curr = torch.zeros(N)
+    r_next = torch.ones(N)
+    d_curr = torch.zeros(N)
     if init_t is not None:
         t = init_t
     else:
-        t = torch.zeros(N, device=device)
+        t = torch.zeros(N)
 
-    sdf_calls = torch.zeros(N, device=device)
+    sdf_calls = torch.zeros(N)
 
     for i in range(15):
         not_reached_max_distance = t < max_length
@@ -134,7 +134,7 @@ def acc_sphere_trace(sdf, init_position, norm_directions, max_length, scale=np.s
 
     # hit_mask = torch.logical_and(t < max_length and r_next < eps)
     hit_mask = t < max_length
-    hits = torch.zeros(N, 3, device=device)
+    hits = torch.zeros(N, 3)
     hits[hit_mask] = positions[hit_mask] + (t[hit_mask] * norm_directions[hit_mask].T).T
     return hits, hit_mask, sdf_calls, t
 
@@ -147,10 +147,10 @@ def two_phase_tracing(sdf, camera_position, norm_directions, max_length, scale=n
     hits_2, hit_mask_2, sdf_calls_2, t_2 = acc_sphere_trace(sdf, hits_1[hit_mask_1], norm_directions[hit_mask_1], 3.,
                                                             scale=np.sqrt(2.), eps=0.005)
 
-    hit_mask = torch.zeros(N, device=device).bool()
+    hit_mask = torch.zeros(N).bool()
     hit_mask[hit_mask_1] = hit_mask_2
 
-    hits = torch.zeros(N, 3, device=device)
+    hits = torch.zeros(N, 3)
     hits[hit_mask] = hits_2[hit_mask_2]
 
     with torch.no_grad():
@@ -170,19 +170,19 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
             chunked = torch.split(nphm_input, max_number, dim=1)
             distances = []
             for chunk in chunked:
-                distance, _ = model(chunk, lat_rep_in, None)
+                distance = model(chunk.to(device), lat_rep_in.to(device), None)[0].to("cpu")
                 distances.append(distance)
             return torch.cat(distances, dim=1).squeeze()
         else:
-            distance, _ = model(nphm_input, lat_rep_in, None)
+            distance = model(nphm_input.to(device), lat_rep_in.to(device), None)[0].to("cpu")
             return distance.squeeze()
 
     pu = camera_params["resolution_x"]
     pv = camera_params["resolution_y"]
-    image = phong_params["background_color"].repeat(pu * pv, 1).to(device)
+    image = phong_params["background_color"].repeat(pu * pv, 1)
 
     angle_radians = torch.deg2rad_(torch.tensor(camera_params["camera_angle"]))
-    camera = torch.tensor([torch.sin(angle_radians), 0, torch.cos(angle_radians)], device=device)
+    camera = torch.tensor([torch.sin(angle_radians), 0, torch.cos(angle_radians)])
     camera_position = camera * (camera_params["camera_distance"] + camera_params["focal_length"]) / camera.norm()
 
     # Normalize the xy value of the current pixel [-0.5, 0.5]
@@ -194,12 +194,12 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
         torch.meshgrid(u_norms, v_norms, torch.tensor(-camera_params["focal_length"]), indexing='ij'), dim=-1)
     directions_unn = directions_unn.reshape(
         (pu * pv, 3))  # [pu, pv, 3] --> [pu*pv, 3] (u1, v1, f)(u1, v2, f)...(u2, v1, f)...
-    directions_unn = directions_unn.to(device)
+    directions_unn = directions_unn
 
     # rotate about y-axis
     rotation_matrix = torch.tensor([[torch.cos(angle_radians), 0, torch.sin(angle_radians)],
                                     [0, 1, 0],
-                                    [-torch.sin(angle_radians), 0, torch.cos(angle_radians)]], device=device)
+                                    [-torch.sin(angle_radians), 0, torch.cos(angle_radians)]])
     rotated_directions = torch.matmul(directions_unn, rotation_matrix.T)
 
     transposed_directions = rotated_directions.T  # transpose is necessary for normalization
