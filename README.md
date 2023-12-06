@@ -1,9 +1,11 @@
 # Text2Head
 
-To use [CLIP](https://github.com/openai/CLIP): 
+Create an environment via 
 ```
-$ conda install --yes -c pytorch pytorch=1.7.1 torchvision cudatoolkit=11.0
-$ pip install ftfy regex tqdm
-$ pip install git+https://github.com/openai/CLIP.git
+conda create -n "Text2Head" python=3.9
+conda activate Text2Head
 ```
-
+and install everything required with
+```
+pip install -r requirements.txt
+```
