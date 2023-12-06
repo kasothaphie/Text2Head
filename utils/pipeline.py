@@ -9,13 +9,13 @@ from NPHM.models.EnsembledDeepSDF import FastEnsembleDeepSDFMirrored
 from NPHM import env_paths
 import matplotlib.pyplot as plt
 
-from render import render
+from utils.render import render
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 model, preprocess = clip.load("ViT-B/32", device=device)
 
-with open('NPHM/scripts/configs/fitting_nphm.yaml', 'r') as f:
+with open('../NPHM/scripts/configs/fitting_nphm.yaml', 'r') as f:
     CFG = yaml.safe_load(f)
     
 weight_dir_shape = env_paths.EXPERIMENT_DIR + '/{}/'.format(CFG['exp_name_shape'])

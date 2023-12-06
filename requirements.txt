@@ -4,3 +4,4 @@ tensorboard
 optuna
 clip @ git+https://github.com/openai/CLIP.git
 -e ./NPHM
+-e .
