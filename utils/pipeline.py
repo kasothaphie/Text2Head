@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 
 from utils.render import render
 
-os.environ['CUDA_VISIBLE_DEVICES'] = 0
+os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 model, preprocess = clip.load("ViT-B/32", device=device)
@@ -72,9 +72,9 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
 def get_latent_from_text(prompt, init_lat=None, n_updates=10):
     if init_lat is None:
         lat_mean, lat_std = get_latent_mean_std()
-        lat_rep = (torch.randn(lat_mean.shape) * lat_std * 0.85 + lat_mean).detach().requires_grad_(True)
+        lat_rep = (torch.randn(lat_mean.shape) * lat_std * 0.85 + lat_mean).detach().to(device).requires_grad_(True)
     else:
-        lat_rep = init_lat.requires_grad_(True)
+        lat_rep = init_lat.to(device).requires_grad_(True)
 
     optimizer = Adam(params=[lat_rep],
                      lr=0.003,
@@ -103,20 +103,20 @@ def get_latent_from_text(prompt, init_lat=None, n_updates=10):
         "specular_coeff": 0.59,
         "shininess": 1.,
         # Colors
-        "object_color": torch.tensor([0.68, 0.38, 0.66]),
-        "background_color": torch.tensor([0.29, 0.68, 0.35])
+        "object_color": torch.tensor([0.68, 0.38, 0.66], device=device),
+        "background_color": torch.tensor([0.29, 0.68, 0.35], device=device)
     }
 
     light_params = {
-        "amb_light_color": torch.tensor([0.72, 0.09, 0.51]),
+        "amb_light_color": torch.tensor([0.72, 0.09, 0.51], device=device),
         # light 1
         "light_intensity_1": 1.53,
-        "light_color_1": torch.tensor([0.85, 0.98, 0.84]),
-        "light_dir_1": torch.tensor([-0.55, -0.30, -0.81]),
+        "light_color_1": torch.tensor([0.85, 0.98, 0.84], device=device),
+        "light_dir_1": torch.tensor([-0.55, -0.30, -0.81], device=device),
         # light p
         "light_intensity_p": 1.22,
-        "light_color_p": torch.tensor([0.85, 0.98, 0.84]),
-        "light_pos_p": torch.tensor([0., -3.28, 0.56])
+        "light_color_p": torch.tensor([0.85, 0.98, 0.84], device=device),
+        "light_pos_p": torch.tensor([0., -3.28, 0.56], device=device)
     }
 
     scores = []
@@ -124,6 +124,7 @@ def get_latent_from_text(prompt, init_lat=None, n_updates=10):
     images = []
     for n in range(n_updates):
         optimizer.zero_grad()
+        torch.cuda.empty_cache()
         score, image = forward(lat_rep, prompt, camera_params, phong_params, light_params)
         scores.append(score.detach())
         latents.append(torch.clone(lat_rep))
@@ -136,7 +137,7 @@ def get_latent_from_text(prompt, init_lat=None, n_updates=10):
         optimizer.step()
         lr_scheduler.step(score)
         print('lr: ', optimizer.param_groups[0]['lr'])
-
+    torch.cuda.empty_cache()
     stats = {
         "scores": scores,
         "latents": latents,
