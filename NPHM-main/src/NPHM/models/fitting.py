@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 from torch import optim
-#from pytorch3d.ops import knn_points, knn_gather
+from pytorch3d.ops import knn_points, knn_gather
 import trimesh
 import numpy as np
 import pyvista as pv
