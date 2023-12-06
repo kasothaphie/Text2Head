@@ -1,0 +1,6 @@
+torch==1.13
+torchvision==0.14
+tensorboard
+optuna
+clip @ git+https://github.com/openai/CLIP.git
+-e ./NPHM
