@@ -6,9 +6,13 @@ import numpy as np
 import clip
 import os
 import os.path as osp
-from NPHM.models.EnsembledDeepSDF import FastEnsembleDeepSDFMirrored
-from NPHM import env_paths
+from src.NPHM.models.EnsembledDeepSDF import FastEnsembleDeepSDFMirrored
+from src.NPHM import env_paths
 import matplotlib.pyplot as plt
+from torch.utils.tensorboard import SummaryWriter
+from datetime import datetime
+from tqdm import tqdm
+import uuid
 
 from utils.render import render
 
@@ -73,7 +77,7 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
     return score, torch.clone(image)
 
 
-def get_latent_from_text(prompt, init_lat=None, n_updates=10):
+def get_latent_from_text(prompt, hparams, init_lat=None):
     if init_lat is None:
         lat_mean, lat_std = get_latent_mean_std()
         lat_rep = (torch.randn(lat_mean.shape) * lat_std * 0.85 + lat_mean).detach().requires_grad_(True)
@@ -81,15 +85,15 @@ def get_latent_from_text(prompt, init_lat=None, n_updates=10):
         lat_rep = init_lat.requires_grad_(True)
 
     optimizer = Adam(params=[lat_rep],
-                     lr=0.002,
+                     lr=hparams['optimizer_lr'],
                      maximize=True)
 
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode='max',
-        factor=0.1,
-        patience=2,
-        min_lr=0.00001
+        factor=hparams['lr_scheduler_factor'],
+        patience=hparams['lr_scheduler_patience'],
+        min_lr=hparams['lr_scheduler_min_lr']
     )
 
     camera_params = {
@@ -98,8 +102,8 @@ def get_latent_from_text(prompt, init_lat=None, n_updates=10):
         "focal_length": 1.58,
         "max_ray_length": (0.25 + 1) * 1.58 + 1.5,
         # Image
-        "resolution_y": 120,
-        "resolution_x": 120
+        "resolution_y": hparams['resolution'],
+        "resolution_x": hparams['resolution']
     }
     phong_params = {
         "ambient_coeff": 0.45,
@@ -123,36 +127,60 @@ def get_latent_from_text(prompt, init_lat=None, n_updates=10):
         "light_pos_p": torch.tensor([0., -3.28, 0.56])
     }
 
+    # Normal Mode
+    #now = datetime.now()
+    #writer = SummaryWriter(log_dir=f'../runs/identity-pipeline/train-time:{now.strftime("%Y-%m-%d-%H:%M:%S")}')
+
+    # Hparam Optimization Mode
+    trial_uuid = str(uuid.uuid4())
+    writer = SummaryWriter(log_dir=f'../runs/identity_pipeline/hparamtuning-{trial_uuid}')
+
     scores = []
     latents = []
     images = []
+    best_score = torch.tensor([0]).cpu()
     torch.cuda.empty_cache()
     optimizer.zero_grad()
-    for n in range(n_updates):
+
+    for iteration in tqdm(range(hparams['n_iterations'])):
+    
         score, image = forward(lat_rep, prompt, camera_params, phong_params, light_params)
+
         scores.append(score.detach().cpu())
         latents.append(torch.clone(lat_rep).cpu())
         images.append(image.cpu())
+
+        if score > best_score:
+            best_score = score
+            best_latent = lat_rep
+
         score.backward()
-        print(f"update step {n} - score: {score}")
-        #plt.imshow(image.detach().numpy())
-        #plt.axis('off')  # Turn off axes
-        #plt.show()
+        print(f"update step {iteration+1} - score: {score}")
+
+        writer.add_scalar('CLIP score', score, iteration)
+        writer.add_scalar('learning rate', optimizer.param_groups[0]['lr'], iteration)
+        if ((iteration == 0) or (iteration % 10 == 0)):
+            writer.add_image(f'rendered image of {prompt}', image.detach().numpy(), iteration, dataformats='HWC')
+
         optimizer.step()
         lr_scheduler.step(score)
-        
+
         score = None
         image = None
         optimizer.zero_grad()
         torch.cuda.empty_cache()
-        print('lr: ', optimizer.param_groups[0]['lr'])
+
+
     stats = {
         "scores": scores,
         "latents": latents,
         "images": images
     }
 
-    return lat_rep.detach(), stats
+    writer.add_hparams(hparams, {'Best score': best_score})
+    writer.close()
+
+    return best_latent.detach(), best_score.detach(), stats
     
     
     
