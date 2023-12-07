@@ -105,8 +105,6 @@ def acc_sphere_trace(sdf, init_position, norm_directions, max_length, scale=np.s
     else:
         t = torch.zeros(N)
 
-    sdf_calls = torch.zeros(N)
-
     for i in range(15):
         not_reached_max_distance = t < max_length
         not_hit = torch.abs(r_next) > eps
@@ -124,27 +122,24 @@ def acc_sphere_trace(sdf, init_position, norm_directions, max_length, scale=np.s
             r_next[mask][normal_tracing_mask] = sdf(positions[mask][normal_tracing_mask] + (
                         (t[mask][normal_tracing_mask] + d_curr[mask][normal_tracing_mask]) * norm_directions[mask][
                     normal_tracing_mask].T).T)
-            sdf_calls[mask][normal_tracing_mask] += 1
 
         t[mask] += d_curr[mask]
         r_last[mask] = r_curr[mask]
         r_curr[mask] = r_next[mask]
 
-        sdf_calls[mask] += 1
-
     # hit_mask = torch.logical_and(t < max_length and r_next < eps)
     hit_mask = t < max_length
     hits = torch.zeros(N, 3)
     hits[hit_mask] = positions[hit_mask] + (t[hit_mask] * norm_directions[hit_mask].T).T
-    return hits, hit_mask, sdf_calls, t
+    return hits, hit_mask, t
 
 
 def two_phase_tracing(sdf, camera_position, norm_directions, max_length, scale=np.sqrt(2.), eps=1e-3):
     N = norm_directions.shape[0]
     with torch.no_grad():
-        hits_1, hit_mask_1, sdf_calls_1, t_1 = acc_sphere_trace(sdf, camera_position, norm_directions, max_length,
+        hits_1, hit_mask_1, t_1 = acc_sphere_trace(sdf, camera_position, norm_directions, max_length,
                                                                 scale=2., eps=0.025)
-    hits_2, hit_mask_2, sdf_calls_2, t_2 = acc_sphere_trace(sdf, hits_1[hit_mask_1], norm_directions[hit_mask_1], 3.,
+    hits_2, hit_mask_2, t_2 = acc_sphere_trace(sdf, hits_1[hit_mask_1], norm_directions[hit_mask_1], 3.,
                                                             scale=np.sqrt(2.), eps=0.005)
 
     hit_mask = torch.zeros(N).bool()
@@ -153,15 +148,11 @@ def two_phase_tracing(sdf, camera_position, norm_directions, max_length, scale=n
     hits = torch.zeros(N, 3)
     hits[hit_mask] = hits_2[hit_mask_2]
 
-    with torch.no_grad():
-        sdf_calls = torch.zeros_like(sdf_calls_1)
-        sdf_calls[hit_mask_1] += sdf_calls_2
-
     return hits, hit_mask
 
 
 def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=None):
-    def sdf(positions, max_number=10000):
+    def sdf(positions, max_number=100000):
         nphm_input = torch.reshape(positions, (1, -1, 3))
 
         lat_rep_in = torch.reshape(lat_rep, (1, 1, -1))
@@ -205,11 +196,13 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
     transposed_directions = rotated_directions.T  # transpose is necessary for normalization
     directions = (transposed_directions / transposed_directions.norm(dim=0)).T  # [pu*pv, 3]
 
+    with torch.no_grad():
     # Option 1: Use SDF
-    hit_positions, hit_mask = two_phase_tracing(sdf, camera_position, directions, camera_params['max_ray_length'])
+        hit_positions, hit_mask = two_phase_tracing(sdf, camera_position, directions, camera_params['max_ray_length'])
     # Option 2: Use Mesh
     # intersections, hit_mask, index_tri = mesh_trace(mesh_path, camera_position, directions)
 
+    #with torch.no_grad():
     # Option 1: Use SDF
     reflections = phong_model(sdf, hit_positions[hit_mask], camera_position, phong_params, light_params, mesh_path)
     # Option 2: Use Mesh

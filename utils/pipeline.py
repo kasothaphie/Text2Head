@@ -15,7 +15,7 @@ from utils.render import render
 os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-model, preprocess = clip.load("ViT-B/32", device=device)
+model, preprocess = clip.load("ViT-B/32", device="cpu")
 
 with open('../NPHM/scripts/configs/fitting_nphm.yaml', 'r') as f:
     CFG = yaml.safe_load(f)
@@ -59,14 +59,18 @@ def get_latent_mean_std():
     return lat_mean, lat_std
 
 def forward(lat_rep, prompt, camera_params, phong_params, light_params):
-    image = render(decoder_shape, lat_rep, camera_params, phong_params, light_params).to(device)
+    image = render(decoder_shape, lat_rep, camera_params, phong_params, light_params)
 
     image_c_first = image.permute(2, 0, 1)
-    image_preprocessed = clip_tensor_preprocessor(image_c_first).unsqueeze(0)
+    image_preprocessed = clip_tensor_preprocessor(image_c_first).unsqueeze(0).cpu()
 
-    prompt_tokenized = clip.tokenize(prompt).to(device)
+    prompt_tokenized = clip.tokenize(prompt).cpu()
+    
+    score = model(image_preprocessed, prompt_tokenized)[0]
 
-    return model(image_preprocessed, prompt_tokenized)[0].to("cpu"), torch.clone(image.cpu())
+    image_preprocessed = None
+    prompt_tokenized = None
+    return score, torch.clone(image)
 
 
 def get_latent_from_text(prompt, init_lat=None, n_updates=10):
@@ -77,7 +81,7 @@ def get_latent_from_text(prompt, init_lat=None, n_updates=10):
         lat_rep = init_lat.requires_grad_(True)
 
     optimizer = Adam(params=[lat_rep],
-                     lr=0.003,
+                     lr=0.002,
                      maximize=True)
 
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -94,8 +98,8 @@ def get_latent_from_text(prompt, init_lat=None, n_updates=10):
         "focal_length": 1.58,
         "max_ray_length": (0.25 + 1) * 1.58 + 1.5,
         # Image
-        "resolution_y": 100,
-        "resolution_x": 100
+        "resolution_y": 120,
+        "resolution_x": 120
     }
     phong_params = {
         "ambient_coeff": 0.45,
