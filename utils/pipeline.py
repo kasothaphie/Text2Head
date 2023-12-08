@@ -70,7 +70,14 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
 
     prompt_tokenized = clip.tokenize(prompt).cpu()
     
-    score = model(image_preprocessed, prompt_tokenized)[0]
+    CLIP_score = model(image_preprocessed, prompt_tokenized)[0]
+    
+    lat_mean, lat_std = get_latent_mean_std()
+    cov = lat_std * torch.eye(lat_mean.shape[0])
+    delta = lat_rep - lat_mean
+    prob = -delta.T @ torch.inverse(cov) @ delta
+    
+    score = CLIP_score + 0.2 * prob
 
     image_preprocessed = None
     prompt_tokenized = None
@@ -151,8 +158,8 @@ def get_latent_from_text(prompt, hparams, init_lat=None):
         images.append(image.cpu())
 
         if score > best_score:
-            best_score = score
-            best_latent = lat_rep
+            best_score = score.detach().cpu()
+            best_latent = torch.clone(lat_rep).cpu()
 
         score.backward()
         print(f"update step {iteration+1} - score: {score}")
