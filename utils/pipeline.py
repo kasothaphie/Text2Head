@@ -104,34 +104,34 @@ def get_latent_from_text(prompt, hparams, init_lat=None):
     )
 
     camera_params = {
-        "camera_distance": 0.25,
+        "camera_distance": 0.21,
         "camera_angle": 45.,
-        "focal_length": 1.58,
+        "focal_length": 2.57,
         "max_ray_length": (0.25 + 1) * 1.58 + 1.5,
         # Image
         "resolution_y": hparams['resolution'],
         "resolution_x": hparams['resolution']
     }
     phong_params = {
-        "ambient_coeff": 0.45,
-        "diffuse_coeff": 0.86,
-        "specular_coeff": 0.59,
-        "shininess": 1.,
+        "ambient_coeff": 0.51,
+        "diffuse_coeff": 0.75,
+        "specular_coeff": 0.64,
+        "shininess": 0.5,
         # Colors
-        "object_color": torch.tensor([0.68, 0.38, 0.66]),
-        "background_color": torch.tensor([0.29, 0.68, 0.35])
+        "object_color": torch.tensor([0.53, 0.24, 0.64]),
+        "background_color": torch.tensor([0.36, 0.77, 0.29])
     }
 
     light_params = {
-        "amb_light_color": torch.tensor([0.72, 0.09, 0.51]),
+        "amb_light_color": torch.tensor([0.9, 0.16, 0.55]),
         # light 1
-        "light_intensity_1": 1.53,
-        "light_color_1": torch.tensor([0.85, 0.98, 0.84]),
-        "light_dir_1": torch.tensor([-0.55, -0.30, -0.81]),
+        "light_intensity_1": 1.42,
+        "light_color_1": torch.tensor([0.8, 0.97, 0.89]),
+        "light_dir_1": torch.tensor([-0.6, -0.4, -0.67]),
         # light p
-        "light_intensity_p": 1.22,
-        "light_color_p": torch.tensor([0.85, 0.98, 0.84]),
-        "light_pos_p": torch.tensor([0., -3.28, 0.56])
+        "light_intensity_p": 0.62,
+        "light_color_p": torch.tensor([0.8, 0.97, 0.89]),
+        "light_pos_p": torch.tensor([1.19, -1.27, 2.24])
     }
 
     # Normal Mode
