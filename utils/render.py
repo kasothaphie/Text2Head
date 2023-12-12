@@ -198,7 +198,12 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
 
     with torch.no_grad():
     # Option 1: Use SDF
-        hit_positions, hit_mask = two_phase_tracing(sdf, camera_position, directions, camera_params['max_ray_length'])
+        # start close to head model to get useful sdf scores
+        first_step_length = camera_params['focal_length'] + camera_params['camera_distance'] - 1
+        N = directions.shape[0]
+        starting_positions = camera_position.unsqueeze(dim=0).repeat(N, 1) + first_step_length * directions
+
+        hit_positions, hit_mask = two_phase_tracing(sdf, starting_positions, directions, camera_params['max_ray_length'])
     # Option 2: Use Mesh
     # intersections, hit_mask, index_tri = mesh_trace(mesh_path, camera_position, directions)
 
