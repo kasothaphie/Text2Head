@@ -8,6 +8,8 @@ import os
 import os.path as osp
 from NPHM.models.EnsembledDeepSDF import FastEnsembleDeepSDFMirrored
 from NPHM import env_paths
+from NPHM.models.EnsembledDeepSDF import FastEnsembleDeepSDFMirrored
+from NPHM import env_paths
 import matplotlib.pyplot as plt
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
@@ -78,11 +80,11 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
     delta = lat_rep.cpu() - lat_mean
     prob = -delta.T @ torch.inverse(cov) @ delta
     
-    score = CLIP_score + 0.2 * prob
+    score = CLIP_score + 0.5 * log_prob
 
     image_preprocessed = None
     prompt_tokenized = None
-    return score, torch.clone(image)
+    return CLIP_score, log_prob, torch.clone(image)
 
 
 def get_latent_from_text(prompt, hparams, init_lat=None):
@@ -110,7 +112,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None):
         "camera_distance": 0.21,
         "camera_angle": 45.,
         "focal_length": 2.57,
-        "max_ray_length": (0.25 + 1) * 1.58 + 1.5,
+        "max_ray_length": 3,
         # Image
         "resolution_y": hparams['resolution'],
         "resolution_x": hparams['resolution']
@@ -163,8 +165,22 @@ def get_latent_from_text(prompt, hparams, init_lat=None):
 
     #prof.start()
     for iteration in tqdm(range(hparams['n_iterations'])):
-        #prof.step()
-        score, image = forward(lat_rep, prompt, camera_params, phong_params, light_params)
+    #prof.step()
+        #random_number = torch.rand(1).item()
+        random_number = 0.7
+        if random_number >= 0.5:
+            camera_params["camera_angle"] = 45.
+            light_params["light_dir_1"] = torch.tensor([-0.6, -0.4, -0.67])
+            light_params["light_pos_p"] = torch.tensor([1.19, -1.27, 2.24])
+        else:
+            camera_params["camera_angle"] = -45.
+            light_params["light_dir_1"] = torch.tensor([0.6, -0.4, -0.67])
+            light_params["light_pos_p"] = torch.tensor([-1.19, -1.27, 2.24])
+            
+    
+        CLIP_score, log_prob_score, image = forward(lat_rep, prompt, camera_params, phong_params, light_params)
+        score = CLIP_score + 0.5 * log_prob_score
+        #score, image = forward(lat_rep, prompt, camera_params, phong_params, light_params)
 
         scores.append(score.detach().cpu())
         latents.append(torch.clone(lat_rep).cpu())
@@ -172,12 +188,16 @@ def get_latent_from_text(prompt, hparams, init_lat=None):
 
         if score > best_score:
             best_score = score.detach().cpu()
+            best_CLIP_score = CLIP_score.detach().cpu()
+            best_prob_score = log_prob_score.detach().cpu()
             best_latent = torch.clone(lat_rep).cpu()
 
         score.backward()
         print(f"update step {iteration+1} - score: {score}")
 
-        writer.add_scalar('CLIP score', score, iteration)
+        writer.add_scalar('Score', score, iteration)
+        writer.add_scalar('CLIP score', CLIP_score, iteration)
+        writer.add_scalar('log prob score', log_prob_score, iteration)
         writer.add_scalar('learning rate', optimizer.param_groups[0]['lr'], iteration)
         if ((iteration == 0) or (iteration % 10 == 0)):
             writer.add_image(f'rendered image of {prompt}', image.detach().numpy(), iteration, dataformats='HWC')
@@ -200,7 +220,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None):
     writer.add_hparams(hparams, {'Best score': best_score})
     writer.close()
 
-    return best_latent.detach(), best_score.detach(), stats
+    return best_latent.detach(), best_CLIP_score, best_prob_score, stats
     
     
     
