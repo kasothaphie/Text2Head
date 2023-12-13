@@ -6,17 +6,18 @@ import numpy as np
 import clip
 import os
 import os.path as osp
-from src.NPHM.models.EnsembledDeepSDF import FastEnsembleDeepSDFMirrored
-from src.NPHM import env_paths
+from NPHM.models.EnsembledDeepSDF import FastEnsembleDeepSDFMirrored
+from NPHM import env_paths
 import matplotlib.pyplot as plt
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 from tqdm import tqdm
 import uuid
 
+from torch.profiler import profile, record_function, ProfilerActivity
+
 from utils.render import render
 
-os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 model, preprocess = clip.load("ViT-B/32", device="cpu")
@@ -47,8 +48,8 @@ decoder_shape = FastEnsembleDeepSDFMirrored(
 decoder_shape = decoder_shape.to(device)
 
 path = osp.join(weight_dir_shape, 'checkpoints/checkpoint_epoch_{}.tar'.format(CFG['checkpoint_shape']))
-checkpoint = torch.load(path, map_location=device)
-decoder_shape.load_state_dict(checkpoint['decoder_state_dict'], strict=True)
+model_checkpoint = torch.load(path, map_location=device)
+decoder_shape.load_state_dict(model_checkpoint['decoder_state_dict'], strict=True)
 
 #from clip preprocessing
 clip_tensor_preprocessor = Compose([
@@ -74,7 +75,7 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
     
     lat_mean, lat_std = get_latent_mean_std()
     cov = lat_std * torch.eye(lat_mean.shape[0])
-    delta = lat_rep - lat_mean
+    delta = lat_rep.cpu() - lat_mean
     prob = -delta.T @ torch.inverse(cov) @ delta
     
     score = CLIP_score + 0.2 * prob
@@ -87,9 +88,11 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
 def get_latent_from_text(prompt, hparams, init_lat=None):
     if init_lat is None:
         lat_mean, lat_std = get_latent_mean_std()
-        lat_rep = (torch.randn(lat_mean.shape) * lat_std * 0.85 + lat_mean).detach().requires_grad_(True)
+        lat_rep = (torch.randn(lat_mean.shape) * lat_std * 0.85 + lat_mean).detach()
     else:
-        lat_rep = init_lat.requires_grad_(True)
+        lat_rep = init_lat
+        
+    lat_rep = lat_rep.to(device).requires_grad_(True)
 
     optimizer = Adam(params=[lat_rep],
                      lr=hparams['optimizer_lr'],
@@ -135,12 +138,12 @@ def get_latent_from_text(prompt, hparams, init_lat=None):
     }
 
     # Normal Mode
-    #now = datetime.now()
-    #writer = SummaryWriter(log_dir=f'../runs/identity-pipeline/train-time:{now.strftime("%Y-%m-%d-%H:%M:%S")}')
+    now = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
+    writer = SummaryWriter(log_dir=f'../runs/identity-pipeline/train-time:{now}')
 
     # Hparam Optimization Mode
-    trial_uuid = str(uuid.uuid4())
-    writer = SummaryWriter(log_dir=f'../runs/identity_pipeline/hparamtuning-{trial_uuid}')
+    #trial_uuid = str(uuid.uuid4())
+    #writer = SummaryWriter(log_dir=f'../runs/identity_pipeline/hparamtuning-{trial_uuid}')
 
     scores = []
     latents = []
@@ -148,9 +151,19 @@ def get_latent_from_text(prompt, hparams, init_lat=None):
     best_score = torch.tensor([0]).cpu()
     torch.cuda.empty_cache()
     optimizer.zero_grad()
-
-    for iteration in tqdm(range(hparams['n_iterations'])):
     
+    prof = profile(
+        #schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
+        on_trace_ready=torch.profiler.tensorboard_trace_handler('../runs/profile/memory'),
+        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+        record_shapes=True,
+        profile_memory=True,
+        use_cuda=True,
+        with_stack=True)
+
+    #prof.start()
+    for iteration in tqdm(range(hparams['n_iterations'])):
+        #prof.step()
         score, image = forward(lat_rep, prompt, camera_params, phong_params, light_params)
 
         scores.append(score.detach().cpu())
@@ -177,7 +190,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None):
         optimizer.zero_grad()
         torch.cuda.empty_cache()
 
-
+    #prof.stop()
     stats = {
         "scores": scores,
         "latents": latents,

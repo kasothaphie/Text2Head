@@ -2,7 +2,6 @@ import torch
 import numpy as np
 import os
 
-os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 def phong_model(sdf, points, camera_position, phong_params, light_params, mesh_path, index_tri=None):
@@ -137,10 +136,9 @@ def acc_sphere_trace(sdf, init_position, norm_directions, max_length, scale=np.s
 def two_phase_tracing(sdf, camera_position, norm_directions, max_length, scale=np.sqrt(2.), eps=1e-3):
     N = norm_directions.shape[0]
     with torch.no_grad():
-        hits_1, hit_mask_1, t_1 = acc_sphere_trace(sdf, camera_position, norm_directions, max_length,
-                                                                scale=2., eps=0.025)
-    hits_2, hit_mask_2, t_2 = acc_sphere_trace(sdf, hits_1[hit_mask_1], norm_directions[hit_mask_1], 3.,
-                                                            scale=np.sqrt(2.), eps=0.005)
+        hits_1, hit_mask_1, t_1 = acc_sphere_trace(sdf, camera_position, norm_directions, max_length, scale=2., eps=0.025)
+    
+    hits_2, hit_mask_2, t_2 = acc_sphere_trace(sdf, hits_1[hit_mask_1], norm_directions[hit_mask_1], 3., scale=np.sqrt(2.), eps=0.005)
 
     hit_mask = torch.zeros(N).bool()
     hit_mask[hit_mask_1] = hit_mask_2
@@ -152,21 +150,42 @@ def two_phase_tracing(sdf, camera_position, norm_directions, max_length, scale=n
 
 
 def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=None):
-    def sdf(positions, max_number=100000):
+    def sdf(positions, max_number=10000):
+        def get_sdf(nphm_input, lat_rep_in, chunk_size=1000):
+            if nphm_input.shape[1] > chunk_size:
+                chunked = torch.split(nphm_input, chunk_size, dim=1)
+                distances = []
+                for chunk in chunked:
+                    distance = model(chunk.to(device), lat_rep_in.to(device).requires_grad_(True), None)[0].to("cpu")
+                    distances.append(distance)
+                return torch.cat(distances, dim=1).squeeze()
+            else:
+                distance = model(nphm_input.to(device), lat_rep_in.to(device).requires_grad_(True), None)[0].to("cpu")
+                return distance.squeeze()
+            
         nphm_input = torch.reshape(positions, (1, -1, 3))
-
+        
         lat_rep_in = torch.reshape(lat_rep, (1, 1, -1))
-
+        
         if nphm_input.shape[1] > max_number:
-            chunked = torch.split(nphm_input, max_number, dim=1)
-            distances = []
-            for chunk in chunked:
-                distance = model(chunk.to(device), lat_rep_in.to(device), None)[0].to("cpu")
-                distances.append(distance)
-            return torch.cat(distances, dim=1).squeeze()
+            with torch.no_grad():
+                gradient_mask = torch.zeros(nphm_input.shape[1])
+                gradient_mask[:max_number] = 1
+                gradient_mask = gradient_mask[torch.randperm(len(gradient_mask))].bool()
+                no_gradient_mask = ~gradient_mask
+            
+            
+            gradient_distance = get_sdf(nphm_input[:, gradient_mask, :], lat_rep_in)
+            with torch.no_grad():
+                no_gradient_distance = get_sdf(nphm_input[:, no_gradient_mask, :], lat_rep_in)
+                
+            distance = torch.zeros_like(gradient_mask).float()
+            distance[gradient_mask] = gradient_distance
+            distance[no_gradient_mask] = no_gradient_distance
         else:
-            distance = model(nphm_input.to(device), lat_rep_in.to(device), None)[0].to("cpu")
-            return distance.squeeze()
+            distance = get_sdf(nphm_input, lat_rep_in)
+
+        return distance
 
     pu = camera_params["resolution_x"]
     pv = camera_params["resolution_y"]
