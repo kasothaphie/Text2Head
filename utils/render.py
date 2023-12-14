@@ -4,11 +4,9 @@ import os
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-def phong_model(sdf, points, camera_position, phong_params, light_params, mesh_path, index_tri=None):
-    # Option 1: Use SDF
+def phong_model(sdf, points, camera_position, phong_params, light_params):
+
     normals = estimate_normals(sdf, points)
-    # Option 2: Use Mesh
-    # normals = mesh_normals(mesh_path, index_tri)
     view_dirs = points - camera_position
     light_dir_1 = light_params["light_dir_1"].repeat(points.shape[0], 1)
     light_dir_p = points - light_params["light_pos_p"].repeat(points.shape[0], 1)
@@ -150,8 +148,9 @@ def two_phase_tracing(sdf, camera_position, norm_directions, max_length, scale=n
 
 
 def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=None):
-    def sdf(positions, max_number=10000):
-        def get_sdf(nphm_input, lat_rep_in, chunk_size=1000):
+
+    def sdf(positions):
+        def get_sdf(nphm_input, lat_rep_in, chunk_size=500):
             if nphm_input.shape[1] > chunk_size:
                 chunked = torch.split(nphm_input, chunk_size, dim=1)
                 distances = []
@@ -164,26 +163,8 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
                 return distance.squeeze()
             
         nphm_input = torch.reshape(positions, (1, -1, 3))
-        
         lat_rep_in = torch.reshape(lat_rep, (1, 1, -1))
-        
-        if nphm_input.shape[1] > max_number:
-            with torch.no_grad():
-                gradient_mask = torch.zeros(nphm_input.shape[1])
-                gradient_mask[:max_number] = 1
-                gradient_mask = gradient_mask[torch.randperm(len(gradient_mask))].bool()
-                no_gradient_mask = ~gradient_mask
-            
-            
-            gradient_distance = get_sdf(nphm_input[:, gradient_mask, :], lat_rep_in)
-            with torch.no_grad():
-                no_gradient_distance = get_sdf(nphm_input[:, no_gradient_mask, :], lat_rep_in)
-                
-            distance = torch.zeros_like(gradient_mask).float()
-            distance[gradient_mask] = gradient_distance
-            distance[no_gradient_mask] = no_gradient_distance
-        else:
-            distance = get_sdf(nphm_input, lat_rep_in)
+        distance = get_sdf(nphm_input, lat_rep_in)
 
         return distance
 
@@ -216,21 +197,59 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
     directions = (transposed_directions / transposed_directions.norm(dim=0)).T  # [pu*pv, 3]
 
     with torch.no_grad():
-    # Option 1: Use SDF
         # start close to head model to get useful sdf scores
         first_step_length = camera_params['focal_length'] + camera_params['camera_distance'] - 1
         N = directions.shape[0]
         starting_positions = camera_position.unsqueeze(dim=0).repeat(N, 1) + first_step_length * directions
 
-        hit_positions, hit_mask = two_phase_tracing(sdf, starting_positions, directions, camera_params['max_ray_length'])
-    # Option 2: Use Mesh
-    # intersections, hit_mask, index_tri = mesh_trace(mesh_path, camera_position, directions)
+        hits_1, hit_mask_1, _ = acc_sphere_trace(sdf, starting_positions, directions, camera_params['max_ray_length'], scale=2., eps=0.025)
+        hit1_points = hits_1[hit_mask_1]
 
-    #with torch.no_grad():
-    # Option 1: Use SDF
-    reflections = phong_model(sdf, hit_positions[hit_mask], camera_position, phong_params, light_params, mesh_path)
-    # Option 2: Use Mesh
-    # reflections = phong_model(sdf, intersections, camera_position, phong_params, light_params, mesh_path, index_tri) # mesh alternative
+    max_number = 500
+    if hit1_points.shape[0] > max_number:
+        with torch.no_grad():
+            gradient_mask = torch.zeros(hit1_points.shape[0])
+            gradient_mask[:max_number] = 1
+            gradient_mask = gradient_mask[torch.randperm(len(gradient_mask))].bool()
+            no_gradient_mask = ~gradient_mask
+            hit1_directions = directions[hit_mask_1]
+
+            no_gradient_hits_2, no_gradient_hit_mask_2, _ = acc_sphere_trace(sdf, hit1_points[no_gradient_mask, :], hit1_directions[no_gradient_mask, :], camera_params['max_ray_length'], scale=np.sqrt(2.), eps=0.005)
+        gradient_hits_2, gradient_hit_mask_2, _ = acc_sphere_trace(sdf, hit1_points[gradient_mask, :], hit1_directions[gradient_mask, :], camera_params['max_ray_length'], scale=np.sqrt(2.), eps=0.005)
+        
+        hits_2 = torch.zeros_like(hit1_points).float()
+        hits_2[no_gradient_mask] = no_gradient_hits_2
+        hits_2[gradient_mask] = gradient_hits_2
+
+        hit_mask_2 = torch.zeros(hit1_points.shape[0]).bool()
+        hit_mask_2[no_gradient_mask] = no_gradient_hit_mask_2
+        hit_mask_2[gradient_mask] = gradient_hit_mask_2
+    else:
+        hits_2, hit_mask_2, _ = acc_sphere_trace(sdf, hits_1[hit_mask_1], directions[hit_mask_1], camera_params['max_ray_length'], scale=np.sqrt(2.), eps=0.005)
+
+    hit_mask = torch.zeros(N).bool()
+    hit_mask[hit_mask_1] = hit_mask_2
+
+    hits = torch.zeros(N, 3)
+    hits[hit_mask] = hits_2[hit_mask_2]
+
+    max_number = 8000
+    phong_points = hits[hit_mask]
+    if phong_points.shape[0] > max_number:
+        with torch.no_grad():
+            gradient_mask = torch.zeros(phong_points.shape[0])
+            gradient_mask[:max_number] = 1
+            gradient_mask = gradient_mask[torch.randperm(len(gradient_mask))].bool()
+            no_gradient_mask = ~gradient_mask
+
+            no_gradient_reflections = phong_model(sdf, phong_points[no_gradient_mask, :], camera_position, phong_params, light_params)
+        gradient_reflections = phong_model(sdf, phong_points[gradient_mask, :], camera_position, phong_params, light_params)
+        reflections = torch.zeros_like(phong_points).float()
+        reflections[gradient_mask] = gradient_reflections
+        reflections[no_gradient_mask] = no_gradient_reflections
+    else:
+        reflections = phong_model(sdf, phong_points, camera_position, phong_params, light_params)
+        
 
     # Assign a color for objects
     image[hit_mask] = torch.mul(reflections, phong_params["object_color"].repeat(reflections.shape[0], 1))

@@ -78,13 +78,11 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
     lat_mean, lat_std = get_latent_mean_std()
     cov = lat_std * torch.eye(lat_mean.shape[0])
     delta = lat_rep.cpu() - lat_mean
-    prob = -delta.T @ torch.inverse(cov) @ delta
-    
-    score = CLIP_score + 0.5 * log_prob
+    prob_score = -delta.T @ torch.inverse(cov) @ delta
 
     image_preprocessed = None
     prompt_tokenized = None
-    return CLIP_score, log_prob, torch.clone(image)
+    return CLIP_score, prob_score, torch.clone(image)
 
 
 def get_latent_from_text(prompt, hparams, init_lat=None):
