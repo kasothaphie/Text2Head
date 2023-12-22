@@ -18,10 +18,10 @@ def CLIP_similarity(image, gt_embedding):
         CenterCrop(224),
         Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
     ])
-
+    gt_embedding = torch.tensor(gt_embedding).to(device, dtype=torch.float16)
     image_c_first = image.permute(2, 0, 1)
     with torch.no_grad():
-        image_preprocessed = clip_tensor_preprocessor(image_c_first).unsqueeze(0)
+        image_preprocessed = clip_tensor_preprocessor(image_c_first).unsqueeze(0).to(device)
         CLIP_embedding = CLIP_model.encode_image(image_preprocessed) # [1, 512]
         CLIP_embedding /= CLIP_embedding.norm(dim=-1, keepdim=True)
 
@@ -31,6 +31,7 @@ def CLIP_similarity(image, gt_embedding):
 
 
 def DINO_similarity(image, gt_embedding):
+    gt_embedding = torch.tensor(gt_embedding).to(device)
     with torch.no_grad():
         input = DINO_processor(images=image, return_tensors="pt", do_rescale=False).to(device)
         output = DINO_model(**input)
