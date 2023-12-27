@@ -205,7 +205,7 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
         hits_1, hit_mask_1, _ = acc_sphere_trace(sdf, starting_positions, directions, camera_params['max_ray_length'], scale=2., eps=0.025)
         hit1_points = hits_1[hit_mask_1]
 
-    max_number = 500
+    max_number = 5
     if hit1_points.shape[0] > max_number:
         with torch.no_grad():
             gradient_mask = torch.zeros(hit1_points.shape[0])
@@ -253,7 +253,9 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
 
     # Assign a color for objects
     image[hit_mask] = torch.mul(reflections, phong_params["object_color"].repeat(reflections.shape[0], 1))
-    image = torch.clamp(image, max=1.0)
+    image = torch.clamp(image, min=0.0, max=1.0)
+    nan_mask = torch.isnan(image)
+    image = torch.where(nan_mask, torch.tensor(0.0), image)
     image = image.reshape(pu, pv, 3).transpose(0, 1)
 
     return image

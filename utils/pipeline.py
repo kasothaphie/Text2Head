@@ -19,6 +19,8 @@ import uuid
 from torch.profiler import profile, record_function, ProfilerActivity
 
 from utils.render import render
+from utils.similarity import CLIP_similarity, DINO_similarity
+
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -85,7 +87,7 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
     return CLIP_score, prob_score, torch.clone(image)
 
 
-def get_latent_from_text(prompt, hparams, init_lat=None):
+def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=None):
     if init_lat is None:
         lat_mean, lat_std = get_latent_mean_std()
         lat_rep = (torch.randn(lat_mean.shape) * lat_std * 0.85 + lat_mean).detach()
@@ -96,6 +98,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None):
 
     optimizer = Adam(params=[lat_rep],
                      lr=hparams['optimizer_lr'],
+                     weight_decay=hparams['optimizer_weight_decay'],
                      maximize=True)
 
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -177,8 +180,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None):
             
     
         CLIP_score, log_prob_score, image = forward(lat_rep, prompt, camera_params, phong_params, light_params)
-        score = CLIP_score + 0.5 * log_prob_score
-        #score, image = forward(lat_rep, prompt, camera_params, phong_params, light_params)
+        score = CLIP_score + 0.3 * log_prob_score
 
         scores.append(score.detach().cpu())
         latents.append(torch.clone(lat_rep).cpu())
@@ -189,9 +191,17 @@ def get_latent_from_text(prompt, hparams, init_lat=None):
             best_CLIP_score = CLIP_score.detach().cpu()
             best_prob_score = log_prob_score.detach().cpu()
             best_latent = torch.clone(lat_rep).cpu()
+        
+        if CLIP_gt != None:
+            CLIP_gt_similarity = CLIP_similarity(image, CLIP_gt)
+            writer.add_scalar('CLIP similarity to ground truth image', CLIP_gt_similarity, iteration)
+
+        if DINO_gt != None:
+            DINO_gt_similarity = DINO_similarity(image, DINO_gt)
+            writer.add_scalar('DINO similarity to ground truth image', DINO_gt_similarity, iteration)
 
         score.backward()
-        print(f"update step {iteration+1} - score: {score}")
+        #print(f"update step {iteration+1} - score: {score}")
 
         writer.add_scalar('Score', score, iteration)
         writer.add_scalar('CLIP score', CLIP_score, iteration)
