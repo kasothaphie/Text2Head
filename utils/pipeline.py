@@ -107,9 +107,9 @@ def get_latent_from_text(prompt, hparams, init_lat=None):
     )
 
     camera_params = {
-        "camera_distance": 0.21,
+        "camera_distance": 1.,
         "camera_angle": 45.,
-        "focal_length": 2.57,
+        "focal_length": 10.,
         "max_ray_length": 3,
         # Image
         "resolution_y": hparams['resolution'],
@@ -152,14 +152,14 @@ def get_latent_from_text(prompt, hparams, init_lat=None):
     torch.cuda.empty_cache()
     optimizer.zero_grad()
     
-    prof = profile(
+    #prof = profile(
         #schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
-        on_trace_ready=torch.profiler.tensorboard_trace_handler('../runs/profile/memory'),
-        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-        record_shapes=True,
-        profile_memory=True,
-        use_cuda=True,
-        with_stack=True)
+    #    on_trace_ready=torch.profiler.tensorboard_trace_handler('../runs/profile/memory'),
+    #    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+    #    record_shapes=True,
+    #    profile_memory=True,
+    #    use_cuda=True,
+    #    with_stack=True)
 
     #prof.start()
     for iteration in tqdm(range(hparams['n_iterations'])):
@@ -177,7 +177,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None):
             
     
         CLIP_score, log_prob_score, image = forward(lat_rep, prompt, camera_params, phong_params, light_params)
-        score = CLIP_score + 0.5 * log_prob_score
+        score = CLIP_score + 2. * log_prob_score
         #score, image = forward(lat_rep, prompt, camera_params, phong_params, light_params)
 
         scores.append(score.detach().cpu())
@@ -191,7 +191,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None):
             best_latent = torch.clone(lat_rep).cpu()
 
         score.backward()
-        print(f"update step {iteration+1} - score: {score}")
+        #print(f"update step {iteration+1} - score: {score.detach().numpy()}")
 
         writer.add_scalar('Score', score, iteration)
         writer.add_scalar('CLIP score', CLIP_score, iteration)

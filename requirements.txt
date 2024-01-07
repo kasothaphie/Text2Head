@@ -1,7 +1,7 @@
 ipykernel
 pandas
-torch==1.13
-torchvision==0.14
+torch
+torchvision
 tensorboard
 optuna
 clip @ git+https://github.com/openai/CLIP.git

@@ -2,6 +2,8 @@ import torch
 import numpy as np
 import os
 
+from torch.utils.checkpoint import checkpoint
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 def phong_model(sdf, points, camera_position, phong_params, light_params):
@@ -149,21 +151,27 @@ def two_phase_tracing(sdf, camera_position, norm_directions, max_length, scale=n
 
 def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=None):
 
-    def sdf(positions):
-        def get_sdf(nphm_input, lat_rep_in, chunk_size=500):
-            if nphm_input.shape[1] > chunk_size:
-                chunked = torch.split(nphm_input, chunk_size, dim=1)
-                distances = []
-                for chunk in chunked:
-                    distance = model(chunk.to(device), lat_rep_in.to(device).requires_grad_(True), None)[0].to("cpu")
-                    distances.append(distance)
-                return torch.cat(distances, dim=1).squeeze()
-            else:
-                distance = model(nphm_input.to(device), lat_rep_in.to(device).requires_grad_(True), None)[0].to("cpu")
-                return distance.squeeze()
+    def sdf(positions, chunk_size=10000):
+        def get_sdf(nphm_input, lat_rep_in):
+            #distance = model(nphm_input.to(device), lat_rep_in, None)[0].to("cpu")
+            distance = checkpoint(model, *[nphm_input.to(device), lat_rep_in, None])[0].to("cpu")
+            return distance.squeeze()
             
         nphm_input = torch.reshape(positions, (1, -1, 3))
         lat_rep_in = torch.reshape(lat_rep, (1, 1, -1))
+        
+        if nphm_input.shape[1] > chunk_size:
+            chunked = torch.split(nphm_input, chunk_size, dim=1)
+            distances = []
+            for chunk in chunked:
+                #distance = model(chunk.to(device), lat_rep_in.to(device).requires_grad_(True), None)[0].to("cpu")
+                distance = get_sdf(chunk, lat_rep_in)
+                distances.append(distance)
+            return torch.cat(distances, dim=0)
+        else:
+            #distance = model(nphm_input.to(device), lat_rep_in.to(device).requires_grad_(True), None)[0].to("cpu")
+            distance = get_sdf(nphm_input, lat_rep_in)
+            return distance
         distance = get_sdf(nphm_input, lat_rep_in)
 
         return distance
@@ -202,30 +210,10 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
         N = directions.shape[0]
         starting_positions = camera_position.unsqueeze(dim=0).repeat(N, 1) + first_step_length * directions
 
-        hits_1, hit_mask_1, _ = acc_sphere_trace(sdf, starting_positions, directions, camera_params['max_ray_length'], scale=2., eps=0.025)
-        hit1_points = hits_1[hit_mask_1]
-
-    max_number = 500
-    if hit1_points.shape[0] > max_number:
-        with torch.no_grad():
-            gradient_mask = torch.zeros(hit1_points.shape[0])
-            gradient_mask[:max_number] = 1
-            gradient_mask = gradient_mask[torch.randperm(len(gradient_mask))].bool()
-            no_gradient_mask = ~gradient_mask
-            hit1_directions = directions[hit_mask_1]
-
-            no_gradient_hits_2, no_gradient_hit_mask_2, _ = acc_sphere_trace(sdf, hit1_points[no_gradient_mask, :], hit1_directions[no_gradient_mask, :], camera_params['max_ray_length'], scale=np.sqrt(2.), eps=0.005)
-        gradient_hits_2, gradient_hit_mask_2, _ = acc_sphere_trace(sdf, hit1_points[gradient_mask, :], hit1_directions[gradient_mask, :], camera_params['max_ray_length'], scale=np.sqrt(2.), eps=0.005)
-        
-        hits_2 = torch.zeros_like(hit1_points).float()
-        hits_2[no_gradient_mask] = no_gradient_hits_2
-        hits_2[gradient_mask] = gradient_hits_2
-
-        hit_mask_2 = torch.zeros(hit1_points.shape[0]).bool()
-        hit_mask_2[no_gradient_mask] = no_gradient_hit_mask_2
-        hit_mask_2[gradient_mask] = gradient_hit_mask_2
-    else:
-        hits_2, hit_mask_2, _ = acc_sphere_trace(sdf, hits_1[hit_mask_1], directions[hit_mask_1], camera_params['max_ray_length'], scale=np.sqrt(2.), eps=0.005)
+        hits_1, hit_mask_1, _ = acc_sphere_trace(sdf, starting_positions, directions, camera_params['max_ray_length'], scale=np.sqrt(2.), eps=0.025)
+    
+    hits_2, hit_mask_2, _ = acc_sphere_trace(sdf, hits_1[hit_mask_1], directions[hit_mask_1], camera_params['max_ray_length'], scale=np.sqrt(2.), eps=0.001)
+            
 
     hit_mask = torch.zeros(N).bool()
     hit_mask[hit_mask_1] = hit_mask_2
@@ -233,7 +221,7 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
     hits = torch.zeros(N, 3)
     hits[hit_mask] = hits_2[hit_mask_2]
 
-    max_number = 8000
+    max_number = 80000000
     phong_points = hits[hit_mask]
     if phong_points.shape[0] > max_number:
         with torch.no_grad():
