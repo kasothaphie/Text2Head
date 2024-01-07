@@ -241,7 +241,9 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
 
     # Assign a color for objects
     image[hit_mask] = torch.mul(reflections, phong_params["object_color"].repeat(reflections.shape[0], 1))
-    image = torch.clamp(image, max=1.0)
+    image = torch.clamp(image, min=0.0, max=1.0)
+    nan_mask = torch.isnan(image)
+    image = torch.where(nan_mask, torch.tensor(0.0), image)
     image = image.reshape(pu, pv, 3).transpose(0, 1)
 
     return image

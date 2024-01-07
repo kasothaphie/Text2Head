@@ -8,8 +8,6 @@ import os
 import os.path as osp
 from NPHM.models.EnsembledDeepSDF import FastEnsembleDeepSDFMirrored
 from NPHM import env_paths
-from NPHM.models.EnsembledDeepSDF import FastEnsembleDeepSDFMirrored
-from NPHM import env_paths
 import matplotlib.pyplot as plt
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
@@ -19,6 +17,8 @@ import uuid
 from torch.profiler import profile, record_function, ProfilerActivity
 
 from utils.render import render
+from utils.similarity import CLIP_similarity, DINO_similarity
+
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -85,17 +85,19 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
     return CLIP_score, prob_score, torch.clone(image)
 
 
-def get_latent_from_text(prompt, hparams, init_lat=None):
+def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=None):
     if init_lat is None:
         lat_mean, lat_std = get_latent_mean_std()
         lat_rep = (torch.randn(lat_mean.shape) * lat_std * 0.85 + lat_mean).detach()
     else:
+        lat_mean, lat_std = get_latent_mean_std()
         lat_rep = init_lat
         
     lat_rep = lat_rep.to(device).requires_grad_(True)
 
     optimizer = Adam(params=[lat_rep],
                      lr=hparams['optimizer_lr'],
+                     weight_decay=hparams['optimizer_weight_decay'],
                      maximize=True)
 
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -174,11 +176,11 @@ def get_latent_from_text(prompt, hparams, init_lat=None):
             camera_params["camera_angle"] = -45.
             light_params["light_dir_1"] = torch.tensor([0.6, -0.4, -0.67])
             light_params["light_pos_p"] = torch.tensor([-1.19, -1.27, 2.24])
-            
-    
+
+        with torch.no_grad():    
+            _, _, mean_image = forward(lat_mean, prompt, camera_params, phong_params, light_params) # validation delta similarity
         CLIP_score, log_prob_score, image = forward(lat_rep, prompt, camera_params, phong_params, light_params)
-        score = CLIP_score + 2. * log_prob_score
-        #score, image = forward(lat_rep, prompt, camera_params, phong_params, light_params)
+        score = CLIP_score + hparams['lambda'] * log_prob_score
 
         scores.append(score.detach().cpu())
         latents.append(torch.clone(lat_rep).cpu())
@@ -189,9 +191,19 @@ def get_latent_from_text(prompt, hparams, init_lat=None):
             best_CLIP_score = CLIP_score.detach().cpu()
             best_prob_score = log_prob_score.detach().cpu()
             best_latent = torch.clone(lat_rep).cpu()
+        
+        if CLIP_gt != None:
+            CLIP_gt_similarity, CLIP_delta_sim = CLIP_similarity(image, CLIP_gt, mean_image)
+            writer.add_scalar('CLIP similarity to ground truth image', CLIP_gt_similarity, iteration)
+            writer.add_scalar('CLIP delta similarity', CLIP_delta_sim, iteration)
+
+        if DINO_gt != None:
+            DINO_gt_similarity, DINO_delta_sim = DINO_similarity(image, DINO_gt, mean_image)
+            writer.add_scalar('DINO similarity to ground truth image', DINO_gt_similarity, iteration)
+            writer.add_scalar('DINO delta similarity', DINO_delta_sim, iteration)
 
         score.backward()
-        #print(f"update step {iteration+1} - score: {score.detach().numpy()}")
+        ##print(f"update step {iteration+1} - score: {score.detach().numpy()}")
 
         writer.add_scalar('Score', score, iteration)
         writer.add_scalar('CLIP score', CLIP_score, iteration)
