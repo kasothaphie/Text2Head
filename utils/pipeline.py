@@ -2,6 +2,7 @@ import yaml
 import torch
 from torch.optim import Adam
 from torchvision.transforms import Compose, Normalize, Resize, CenterCrop, InterpolationMode
+from torch.nn.utils import clip_grad_value_
 import numpy as np
 import clip
 import os
@@ -66,8 +67,9 @@ def get_latent_mean_std():
     return lat_mean, lat_std
 
 def forward(lat_rep, prompt, camera_params, phong_params, light_params):
+    lat_rep = lat_rep.to(device) 
     image = render(decoder_shape, lat_rep, camera_params, phong_params, light_params)
-
+    
     image_c_first = image.permute(2, 0, 1)
     image_preprocessed = clip_tensor_preprocessor(image_c_first).unsqueeze(0).cpu()
 
@@ -97,7 +99,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
     optimizer = Adam(params=[lat_rep],
                      lr=hparams['optimizer_lr'],
-                     weight_decay=hparams['optimizer_weight_decay'],
+                     weight_decay=0,
                      maximize=True)
 
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -109,9 +111,9 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     )
 
     camera_params = {
-        "camera_distance": 1.,
+        "camera_distance": 0.21,
         "camera_angle": 45.,
-        "focal_length": 10.,
+        "focal_length": 2.57,
         "max_ray_length": 3,
         # Image
         "resolution_y": hparams['resolution'],
@@ -177,7 +179,8 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             light_params["light_dir_1"] = torch.tensor([0.6, -0.4, -0.67])
             light_params["light_pos_p"] = torch.tensor([-1.19, -1.27, 2.24])
 
-        with torch.no_grad():    
+        with torch.no_grad():   
+            lat_mean = lat_mean.to(device) 
             _, _, mean_image = forward(lat_mean, prompt, camera_params, phong_params, light_params) # validation delta similarity
         CLIP_score, log_prob_score, image = forward(lat_rep, prompt, camera_params, phong_params, light_params)
         score = CLIP_score + hparams['lambda'] * log_prob_score
@@ -203,12 +206,14 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             writer.add_scalar('DINO delta similarity', DINO_delta_sim, iteration)
 
         score.backward()
-        ##print(f"update step {iteration+1} - score: {score.detach().numpy()}")
+        clip_grad_value_([lat_rep], hparams['grad_clip_value'])
+        gradient_lat_rep = lat_rep.grad
 
         writer.add_scalar('Score', score, iteration)
         writer.add_scalar('CLIP score', CLIP_score, iteration)
         writer.add_scalar('log prob score', log_prob_score, iteration)
         writer.add_scalar('learning rate', optimizer.param_groups[0]['lr'], iteration)
+        writer.add_scalar('Gradient of Score w.r.t. Latent', gradient_lat_rep.norm(), iteration)
         if ((iteration == 0) or (iteration % 10 == 0)):
             writer.add_image(f'rendered image of {prompt}', image.detach().numpy(), iteration, dataformats='HWC')
 
