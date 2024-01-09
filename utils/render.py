@@ -152,6 +152,7 @@ def two_phase_tracing(sdf, camera_position, norm_directions, max_length, scale=n
 def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=None):
 
     def sdf(positions, chunk_size=10000):
+    
         def get_sdf(nphm_input, lat_rep_in):
             #distance = model(nphm_input.to(device), lat_rep_in, None)[0].to("cpu")
             distance = checkpoint(model, *[nphm_input.to(device), lat_rep_in, None])[0].to("cpu")
@@ -161,20 +162,13 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
         lat_rep_in = torch.reshape(lat_rep, (1, 1, -1))
         
         if nphm_input.shape[1] > chunk_size:
-            chunked = torch.split(nphm_input, chunk_size, dim=1)
-            distances = []
-            for chunk in chunked:
-                #distance = model(chunk.to(device), lat_rep_in.to(device).requires_grad_(True), None)[0].to("cpu")
-                distance = get_sdf(chunk, lat_rep_in)
-                distances.append(distance)
+            chunked = torch.chunk(nphm_input, chunks=nphm_input.shape[1] // chunk_size, dim=1)
+            distances = [get_sdf(chunk, lat_rep_in) for chunk in chunked]
             return torch.cat(distances, dim=0)
         else:
             #distance = model(nphm_input.to(device), lat_rep_in.to(device).requires_grad_(True), None)[0].to("cpu")
             distance = get_sdf(nphm_input, lat_rep_in)
             return distance
-        distance = get_sdf(nphm_input, lat_rep_in)
-
-        return distance
 
     pu = camera_params["resolution_x"]
     pv = camera_params["resolution_y"]
