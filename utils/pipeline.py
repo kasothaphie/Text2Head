@@ -85,6 +85,47 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
     return CLIP_score, prob_score, torch.clone(image)
 
 
+def energy_level(lat_rep_1, lat_rep_2, prompt, hparams, steps=100):
+    camera_params = {
+        "camera_distance": 1.,
+        "camera_angle": 45.,
+        "focal_length": 10.,
+        "max_ray_length": 3,
+        # Image
+        "resolution_y": hparams['resolution'],
+        "resolution_x": hparams['resolution']
+    }
+    phong_params = {
+        "ambient_coeff": 0.51,
+        "diffuse_coeff": 0.75,
+        "specular_coeff": 0.64,
+        "shininess": 0.5,
+        # Colors
+        "object_color": torch.tensor([0.53, 0.24, 0.64]),
+        "background_color": torch.tensor([0.36, 0.77, 0.29])
+    }
+
+    light_params = {
+        "amb_light_color": torch.tensor([0.9, 0.16, 0.55]),
+        # light 1
+        "light_intensity_1": 1.42,
+        "light_color_1": torch.tensor([0.8, 0.97, 0.89]),
+        "light_dir_1": torch.tensor([-0.6, -0.4, -0.67]),
+        # light p
+        "light_intensity_p": 0.62,
+        "light_color_p": torch.tensor([0.8, 0.97, 0.89]),
+        "light_pos_p": torch.tensor([1.19, -1.27, 2.24])
+    }
+    
+    with torch.no_grad():
+        lat_reps = [torch.lerp(lat_rep_1, lat_rep_2, i) for i in torch.linspace(0., 1., steps)]
+        forwards = [forward(lat_rep, prompt, camera_params, phong_params, light_params) for lat_rep in lat_reps]
+        energy = [f[0] + hparams['lambda'] * f[1] for f in forwards]
+    
+    return energy
+    
+    
+
 def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=None):
     if init_lat is None:
         lat_mean, lat_std = get_latent_mean_std()
