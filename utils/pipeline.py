@@ -2,6 +2,7 @@ import yaml
 import torch
 from torch.optim import Adam
 from torchvision.transforms import Compose, Normalize, Resize, CenterCrop, InterpolationMode
+from torch.nn.utils import clip_grad_value_
 import numpy as np
 import clip
 import os
@@ -66,8 +67,9 @@ def get_latent_mean_std():
     return lat_mean, lat_std
 
 def forward(lat_rep, prompt, camera_params, phong_params, light_params):
+    lat_rep = lat_rep.to(device) 
     image = render(decoder_shape, lat_rep, camera_params, phong_params, light_params)
-
+    
     image_c_first = image.permute(2, 0, 1)
     image_preprocessed = clip_tensor_preprocessor(image_c_first).unsqueeze(0).cpu()
 
@@ -138,7 +140,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
     optimizer = Adam(params=[lat_rep],
                      lr=hparams['optimizer_lr'],
-                     weight_decay=hparams['optimizer_weight_decay'],
+                     weight_decay=0,
                      maximize=True)
 
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -150,9 +152,9 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     )
 
     camera_params = {
-        "camera_distance": 1.,
+        "camera_distance": 0.21,
         "camera_angle": 45.,
-        "focal_length": 10.,
+        "focal_length": 2.57,
         "max_ray_length": 3,
         # Image
         "resolution_y": hparams['resolution'],
@@ -182,7 +184,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
     # Normal Mode
     now = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
-    writer = SummaryWriter(log_dir=f'../runs/identity-pipeline/train-time:{now}')
+    writer = SummaryWriter(log_dir=f'../runs/all_angles/train-time:{now}')
 
     # Hparam Optimization Mode
     #trial_uuid = str(uuid.uuid4())
@@ -207,18 +209,51 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     #prof.start()
     for iteration in tqdm(range(hparams['n_iterations'])):
     #prof.step()
-        #random_number = torch.rand(1).item()
-        random_number = 0.7
-        if random_number >= 0.5:
+        angle_mode = 'all sides' # choose: 'only one', 'randomly varying' or 'all sides'
+        if angle_mode == 'only one':
             camera_params["camera_angle"] = 45.
             light_params["light_dir_1"] = torch.tensor([-0.6, -0.4, -0.67])
             light_params["light_pos_p"] = torch.tensor([1.19, -1.27, 2.24])
+        elif angle_mode == 'randomly varying':
+            '''
+            switch between different camera angles:
+            45° (p = 0.3), -45° (p = 0.3), 10° (p = 0.2), -10° (p = 0.2)
+            '''
+            random_number = torch.rand(1).item()
+            if random_number >= 0.5:
+                light_params["light_dir_1"] = torch.tensor([-0.6, -0.4, -0.67])
+                light_params["light_pos_p"] = torch.tensor([1.19, -1.27, 2.24])
+                if random_number >= 0.7:
+                    camera_params["camera_angle"] = 45.
+                else:
+                    camera_params["camera_angle"] = 10.
+            else:
+                light_params["light_dir_1"] = torch.tensor([0.6, -0.4, -0.67])
+                light_params["light_pos_p"] = torch.tensor([-1.19, -1.27, 2.24])
+                if random_number <= 0.3:
+                    camera_params["camera_angle"] = -45.
+                else:
+                    camera_params["camera_angle"] = -10.
+        elif angle_mode == 'all sides':
+            '''
+            sequentially switch between different camera angles:
+            45°, 0°, -45°
+            accumulate gradients and only update lat rep every third iteration
+            '''
+            all_considered_angles = [45., 0., -45.]
+            current_angle = all_considered_angles[iteration % len(all_considered_angles)]
+            camera_params["camera_angle"] = current_angle
+            if current_angle >= 0:
+                light_params["light_dir_1"] = torch.tensor([-0.6, -0.4, -0.67])
+                light_params["light_pos_p"] = torch.tensor([1.19, -1.27, 2.24])
+            else:
+                light_params["light_dir_1"] = torch.tensor([0.6, -0.4, -0.67])
+                light_params["light_pos_p"] = torch.tensor([-1.19, -1.27, 2.24])
         else:
-            camera_params["camera_angle"] = -45.
-            light_params["light_dir_1"] = torch.tensor([0.6, -0.4, -0.67])
-            light_params["light_pos_p"] = torch.tensor([-1.19, -1.27, 2.24])
+            print('No valid angle_mode')
 
-        with torch.no_grad():    
+        with torch.no_grad():   
+            lat_mean = lat_mean.to(device) 
             _, _, mean_image = forward(lat_mean, prompt, camera_params, phong_params, light_params) # validation delta similarity
         CLIP_score, log_prob_score, image = forward(lat_rep, prompt, camera_params, phong_params, light_params)
         score = CLIP_score + hparams['lambda'] * log_prob_score
@@ -232,34 +267,71 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             best_CLIP_score = CLIP_score.detach().cpu()
             best_prob_score = log_prob_score.detach().cpu()
             best_latent = torch.clone(lat_rep).cpu()
-        
-        if CLIP_gt != None:
-            CLIP_gt_similarity, CLIP_delta_sim = CLIP_similarity(image, CLIP_gt, mean_image)
-            writer.add_scalar('CLIP similarity to ground truth image', CLIP_gt_similarity, iteration)
-            writer.add_scalar('CLIP delta similarity', CLIP_delta_sim, iteration)
-
-        if DINO_gt != None:
-            DINO_gt_similarity, DINO_delta_sim = DINO_similarity(image, DINO_gt, mean_image)
-            writer.add_scalar('DINO similarity to ground truth image', DINO_gt_similarity, iteration)
-            writer.add_scalar('DINO delta similarity', DINO_delta_sim, iteration)
 
         score.backward()
-        ##print(f"update step {iteration+1} - score: {score.detach().numpy()}")
 
-        writer.add_scalar('Score', score, iteration)
-        writer.add_scalar('CLIP score', CLIP_score, iteration)
-        writer.add_scalar('log prob score', log_prob_score, iteration)
-        writer.add_scalar('learning rate', optimizer.param_groups[0]['lr'], iteration)
-        if ((iteration == 0) or (iteration % 10 == 0)):
-            writer.add_image(f'rendered image of {prompt}', image.detach().numpy(), iteration, dataformats='HWC')
+        if angle_mode == 'all sides':
+            '''
+            accumulate gradients for camera angles 45°, 0°, -45° before taking an update step
+            '''
+            if (iteration == 0) or ((iteration + 1) % 3 == 0):
+                if CLIP_gt != None:
+                    CLIP_gt_similarity, CLIP_delta_sim = CLIP_similarity(image, CLIP_gt, mean_image)
+                    writer.add_scalar('CLIP similarity to ground truth image', CLIP_gt_similarity, iteration)
+                    writer.add_scalar('CLIP delta similarity', CLIP_delta_sim, iteration)
 
-        optimizer.step()
-        lr_scheduler.step(score)
+                if DINO_gt != None:
+                    DINO_gt_similarity, DINO_delta_sim = DINO_similarity(image, DINO_gt, mean_image)
+                    writer.add_scalar('DINO similarity to ground truth image', DINO_gt_similarity, iteration)
+                    writer.add_scalar('DINO delta similarity', DINO_delta_sim, iteration)
 
-        score = None
-        image = None
-        optimizer.zero_grad()
-        torch.cuda.empty_cache()
+                clip_grad_value_([lat_rep], hparams['grad_clip_value'])
+                gradient_lat_rep = lat_rep.grad
+
+                writer.add_scalar('Score', score, iteration)
+                writer.add_scalar('CLIP score', CLIP_score, iteration)
+                writer.add_scalar('log prob score', log_prob_score, iteration)
+                writer.add_scalar('learning rate', optimizer.param_groups[0]['lr'], iteration)
+                writer.add_scalar('Gradient norm of Score w.r.t. Latent', gradient_lat_rep.norm(), iteration)
+                if ((iteration == 0) or ((iteration + 1) % 9 == 0)):
+                    writer.add_image(f'rendered image of {prompt}', image.detach().numpy(), iteration, dataformats='HWC')
+
+                optimizer.step()
+                lr_scheduler.step(score)
+
+                score = None
+                image = None
+                optimizer.zero_grad()
+                torch.cuda.empty_cache()
+        else:
+            if CLIP_gt != None:
+                CLIP_gt_similarity, CLIP_delta_sim = CLIP_similarity(image, CLIP_gt, mean_image)
+                writer.add_scalar('CLIP similarity to ground truth image', CLIP_gt_similarity, iteration)
+                writer.add_scalar('CLIP delta similarity', CLIP_delta_sim, iteration)
+
+            if DINO_gt != None:
+                DINO_gt_similarity, DINO_delta_sim = DINO_similarity(image, DINO_gt, mean_image)
+                writer.add_scalar('DINO similarity to ground truth image', DINO_gt_similarity, iteration)
+                writer.add_scalar('DINO delta similarity', DINO_delta_sim, iteration)
+
+            clip_grad_value_([lat_rep], hparams['grad_clip_value'])
+            gradient_lat_rep = lat_rep.grad
+
+            writer.add_scalar('Score', score, iteration)
+            writer.add_scalar('CLIP score', CLIP_score, iteration)
+            writer.add_scalar('log prob score', log_prob_score, iteration)
+            writer.add_scalar('learning rate', optimizer.param_groups[0]['lr'], iteration)
+            writer.add_scalar('Gradient norm of Score w.r.t. Latent', gradient_lat_rep.norm(), iteration)
+            if ((iteration == 0) or (iteration % 10 == 0)):
+                writer.add_image(f'rendered image of {prompt}', image.detach().numpy(), iteration, dataformats='HWC')
+
+            optimizer.step()
+            lr_scheduler.step(score)
+
+            score = None
+            image = None
+            optimizer.zero_grad()
+            torch.cuda.empty_cache()
 
     #prof.stop()
     stats = {
