@@ -34,7 +34,13 @@ def CLIP_similarity(image, gt_embedding, mean_image):
         CLIP_embedding_mean = CLIP_model.encode_image(image_preprocessed_mean) # [1, 512]
         CLIP_embedding_mean /= CLIP_embedding_mean.norm(dim=-1, keepdim=True)
 
-        CLIP_delta_similarity = 100 * torch.matmul((CLIP_embedding - CLIP_embedding_mean), (gt_embedding - CLIP_embedding_mean).T)
+        delta_optimized = CLIP_embedding - CLIP_embedding_mean
+        delta_gt = gt_embedding - CLIP_embedding_mean
+        if delta_optimized.norm() >= 1e-6:
+            delta_optimized /= delta_optimized.norm(dim=-1, keepdim=True)
+        delta_gt /= delta_gt.norm(dim=-1, keepdim=True)
+
+        CLIP_delta_similarity = 100 * torch.matmul(delta_optimized, delta_gt.T)
     
     return CLIP_similarity, CLIP_delta_similarity
 
@@ -58,6 +64,12 @@ def DINO_similarity(image, gt_embedding, mean_image):
         DINO_embedding_mean  = CLS_token_mean.mean(dim=1) # [1, 768]
         DINO_embedding_mean /= DINO_embedding_mean.norm(dim=-1, keepdim=True)
 
-        DINO_delta_similarity = 100 * torch.matmul((DINO_embedding - DINO_embedding_mean), (gt_embedding - DINO_embedding_mean).T)
+        delta_optimized = DINO_embedding - DINO_embedding_mean
+        delta_gt = gt_embedding - DINO_embedding_mean
+        if delta_optimized.norm() >= 1e-6:
+            delta_optimized /= delta_optimized.norm(dim=-1, keepdim=True)
+        delta_gt /= delta_gt.norm(dim=-1, keepdim=True)
+
+        DINO_delta_similarity = 100 * torch.matmul(delta_optimized, delta_gt.T)
     
     return DINO_similarity, DINO_delta_similarity
