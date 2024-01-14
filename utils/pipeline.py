@@ -62,65 +62,74 @@ clip_tensor_preprocessor = Compose([
     Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
 ])
 
-def get_latent_mean_std():
-    lat_mean = torch.from_numpy(np.load(env_paths.ASSETS + 'nphm_lat_mean.npy'))
-    lat_std = torch.from_numpy(np.load(env_paths.ASSETS + 'nphm_lat_std.npy'))
-    return lat_mean, lat_std
+lat_mean = torch.from_numpy(np.load(env_paths.ASSETS + 'nphm_lat_mean.npy'))
+lat_std = torch.from_numpy(np.load(env_paths.ASSETS + 'nphm_lat_std.npy'))
 
-def forward(lat_rep, prompt, camera_params, phong_params, light_params):
-    lat_mean, lat_std = get_latent_mean_std()
-    lat_mean = lat_mean.to(device)
-    lat_rep = lat_rep.to(device) 
+def loss_fn(clip_score, prob_score, hparams):
+    return clip_score + hparams["lambda"] * prob_score
 
-    # --- Render Image from current Lat Rep + Embedd ---
+def get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params):
     image = render(decoder_shape, lat_rep, camera_params, phong_params, light_params)
     image_c_first = image.permute(2, 0, 1)
     image_preprocessed = clip_tensor_preprocessor(image_c_first).unsqueeze(0).cpu()
     CLIP_embedding_image = CLIP_model.encode_image(image_preprocessed) # [1, 512]
     normalized_CLIP_embedding_image = CLIP_embedding_image / CLIP_embedding_image.norm(dim=-1, keepdim=True)
+    
+    return normalized_CLIP_embedding_image, image
 
+def get_text_clip_embedding(prompt):
+    prompt_tokenized = clip.tokenize(prompt).cpu()
+    text_embedded = CLIP_model.encode_text(prompt_tokenized)
+    text_embedded_normalized = text_embedded / text_embedded.norm(dim=-1, keepdim=True)
+    
+    return text_embedded_normalized
+
+def clip_score(image_embedding, text_embedding):
+    return 100 * torch.matmul(image_embedding, text_embedding.T)
+
+def log_prop_score(lat_rep):
+    cov = lat_std * torch.eye(lat_mean.shape[0])
+    delta = lat_rep.cpu() - lat_mean.cpu()
+    prob_score = -delta.T @ torch.inverse(cov) @ delta
+    
+    return prob_score
+    
+
+def forward(lat_rep, prompt, camera_params, phong_params, light_params):
+    # --- Render Image from current Lat Rep + Embedd ---
+    image_embedding, image = get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params)
+    
     # --- Render Image from Lat Mean WITH SAME PARAMS AS LAT REP + Embedd ---
-    image_mean = render(decoder_shape, lat_mean, camera_params, phong_params, light_params)
-    image_mean_c_first = image_mean.permute(2, 0, 1)
-    image_mean_preprocessed = clip_tensor_preprocessor(image_mean_c_first).unsqueeze(0).cpu()
-    CLIP_embedding_image_mean = CLIP_model.encode_image(image_mean_preprocessed) # [1, 512]
-    normalized_CLIP_embedding_image_mean = CLIP_embedding_image_mean / CLIP_embedding_image_mean.norm(dim=-1, keepdim=True)
-
+    mean_image_embedding, _ = get_image_clip_embedding(lat_mean, camera_params, phong_params, light_params)
+    
     # --- Difference between both embeddings ---
-    delta_images = normalized_CLIP_embedding_image - normalized_CLIP_embedding_image_mean
+    delta_images = image_embedding - mean_image_embedding
     if delta_images.norm() >= 1e-9:
         delta_images_normalized = delta_images / delta_images.norm(dim=-1, keepdim=True)
     else:
         delta_images_normalized = delta_images
 
     # --- Text Embedding ---
-    prompt_tokenized = clip.tokenize(prompt).cpu()
-    text_embedded = CLIP_model.encode_text(prompt_tokenized)
-    text_embedded_normalized = text_embedded / text_embedded.norm(dim=-1, keepdim=True)
+    text_embedded_normalized = get_text_clip_embedding(prompt)
 
     # --- Delta CLIP Score ---
-    delta_CLIP_score = 100 * torch.matmul(delta_images_normalized, text_embedded_normalized.T)
+    delta_CLIP_score = clip_score(delta_images_normalized, text_embedded_normalized)
     
     # --- Log Prob Score ---
-    cov = lat_std * torch.eye(lat_mean.shape[0])
-    delta = lat_rep.cpu() - lat_mean.cpu()
-    prob_score = -delta.T @ torch.inverse(cov) @ delta
+    prob_score = log_prop_score(lat_rep)
 
     return delta_CLIP_score, prob_score, torch.clone(image)
 
 
 def energy_level(lat_rep_1, lat_rep_2, prompt, hparams, steps=100):
-    camera_params, phong_params, light_params = get_optimal_params(hparams['resolution'])
     with torch.no_grad():
         lat_reps = [torch.lerp(lat_rep_1, lat_rep_2, i) for i in torch.linspace(0., 1., steps)]
-        forwards = [forward(lat_rep, prompt, camera_params, phong_params, light_params) for lat_rep in lat_reps]
-        energy = [f[0] + hparams['lambda'] * f[1] for f in forwards]
+        forwards = [batch_forward(lat_rep, prompt, hparams["batch_size"], hparams["resolution"]) for lat_rep in lat_reps]
+        energy = [loss_fn(f[0], f[1], hparams) for f in forwards]
     
-    return energy
+    return energy, forwards
 
 def get_augmented_params(lat_rep, resolution):
-    _, lat_std = get_latent_mean_std()
-
     # --- Latent Representation Augmentation ---
     # Generate random values from a normal distribution with standard deviation a
     a = 0.005 #@simon
@@ -194,6 +203,7 @@ def get_augmented_params(lat_rep, resolution):
 def batch_forward(lat_rep_orig, prompt, batch_size, resolution):
     all_delta_CLIP_scores = []
     all_log_probs = []
+    
     for _ in range(batch_size):
         lat_rep, camera_params, phong_params, light_params = get_augmented_params(lat_rep_orig, resolution)
         delta_CLIP_score, log_prob, _ = forward(lat_rep, prompt, camera_params, phong_params, light_params)
@@ -242,9 +252,10 @@ def get_optimal_params(resolution):
 
 
 def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=None):
-    lat_mean, lat_std = get_latent_mean_std()
+    global lat_std, lat_mean
+    
     if init_lat is None:
-        lat_rep = (torch.randn(lat_mean.shape) * lat_std * 0.85 + lat_mean).detach()
+        lat_rep = (torch.randn_like(lat_std) * lat_std * 0.85 + lat_mean).detach()
     else:
         lat_rep = init_lat
         
@@ -274,7 +285,8 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     now = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
     writer = SummaryWriter(log_dir=f'../runs/refact/train-time:{now}')
 
-    best_score = torch.tensor([0]).cpu()
+    best_score = torch.tensor([-torch.inf]).cpu()
+    best_clip_score = torch.tensor([-torch.inf]).cpu()
     torch.cuda.empty_cache()
     optimizer.zero_grad()
     
@@ -291,17 +303,21 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     for iteration in tqdm(range(hparams['n_iterations'])):
     #prof.step()
         batch_delta_CLIP_score, batch_log_prob_score = batch_forward(lat_rep, prompt, hparams['batch_size'], hparams['resolution'])
-        batch_score = batch_delta_CLIP_score + hparams['lambda'] * batch_log_prob_score
+        batch_score = loss_fn(batch_delta_CLIP_score, batch_log_prob_score, hparams)
 
         if batch_score > best_score:
             best_score = batch_score.detach().cpu()
             best_latent = torch.clone(lat_rep).cpu()
+            
+        if batch_delta_CLIP_score > best_clip_score:
+            best_clip_score = batch_delta_CLIP_score.detach().cpu()
+            best_clip_latent = torch.clone(lat_rep).cpu()
 
         batch_score.backward()
 
         # --- Validation with CLIP / DINO Delta Score ---
-        if (CLIP_gt != None) or (DINO_gt != None):
-            image = render(decoder_shape, lat_rep, camera_params_opti, phong_params_opti, light_params_opti)
+        #if (CLIP_gt != None) or (DINO_gt != None):
+        image = render(decoder_shape, lat_rep, camera_params_opti, phong_params_opti, light_params_opti)
         if CLIP_gt != None:
             CLIP_gt_similarity, CLIP_delta_sim = CLIP_similarity(image, CLIP_gt, mean_image)
             writer.add_scalar('CLIP similarity to ground truth image', CLIP_gt_similarity, iteration)
@@ -323,16 +339,19 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         writer.add_image(f'rendered image of {prompt}', image.detach().numpy(), iteration, dataformats='HWC')
 
         optimizer.step()
-        lr_scheduler.step(batch_score)
+        lr_scheduler.step(batch_delta_CLIP_score)
 
         optimizer.zero_grad()          
 
     #prof.stop()
 
-    writer.add_hparams(hparams, {'Best score': best_score})
+    writer.add_hparams(hparams, {
+        'Best score': best_score,
+        'Best CLIP score': best_clip_score
+        })
     writer.close()
 
-    return best_latent.detach()
+    return best_latent.detach(), best_clip_latent.detach()
     
     
     
