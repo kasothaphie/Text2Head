@@ -338,3 +338,5 @@ pyrightconfig.json
 .history
 .ionide
 env_paths.py
+runs/
+latents/
