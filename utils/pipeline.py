@@ -316,8 +316,8 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         batch_score.backward()
 
         # --- Validation with CLIP / DINO Delta Score ---
-        #if (CLIP_gt != None) or (DINO_gt != None):
-        image = render(decoder_shape, lat_rep, camera_params_opti, phong_params_opti, light_params_opti)
+        if (CLIP_gt != None) or (DINO_gt != None):
+            image = render(decoder_shape, lat_rep, camera_params_opti, phong_params_opti, light_params_opti)
         if CLIP_gt != None:
             CLIP_gt_similarity, CLIP_delta_sim = CLIP_similarity(image, CLIP_gt, mean_image)
             writer.add_scalar('CLIP similarity to ground truth image', CLIP_gt_similarity, iteration)
@@ -339,7 +339,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         writer.add_image(f'rendered image of {prompt}', image.detach().numpy(), iteration, dataformats='HWC')
 
         optimizer.step()
-        lr_scheduler.step(batch_delta_CLIP_score)
+        lr_scheduler.step(batch_score)
 
         optimizer.zero_grad()          
 
