@@ -20,6 +20,7 @@ from torch.profiler import profile, record_function, ProfilerActivity
 
 from utils.render import render
 from utils.similarity import CLIP_similarity, DINO_similarity
+from utils.EMA import EMA
 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -69,6 +70,7 @@ def loss_fn(clip_score, prob_score, hparams):
     return clip_score + hparams["lambda"] * prob_score
 
 def get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params):
+    lat_rep = lat_rep.to(device)
     image = render(decoder_shape, lat_rep, camera_params, phong_params, light_params)
     image_c_first = image.permute(2, 0, 1)
     image_preprocessed = clip_tensor_preprocessor(image_c_first).unsqueeze(0).cpu()
@@ -90,7 +92,7 @@ def clip_score(image_embedding, text_embedding):
 def log_prop_score(lat_rep):
     cov = lat_std * torch.eye(lat_mean.shape[0])
     delta = lat_rep.cpu() - lat_mean.cpu()
-    prob_score = -delta.T @ torch.inverse(cov) @ delta
+    prob_score = -delta.T @ torch.inverse(cov.cpu()) @ delta
     
     return prob_score
     
@@ -129,11 +131,10 @@ def energy_level(lat_rep_1, lat_rep_2, prompt, hparams, steps=100):
     
     return energy, forwards
 
-def get_augmented_params(lat_rep, resolution):
+def get_augmented_params(lat_rep, resolution, alpha):
     # --- Latent Representation Augmentation ---
     # Generate random values from a normal distribution with standard deviation a
-    a = 0.005 #@simon
-    random_multipliers = torch.randn(lat_std.shape) * a
+    random_multipliers = torch.randn(lat_std.shape) * alpha
     shift = lat_std * random_multipliers
     shift = shift.to(device)
     lat_rep_aug = lat_rep + shift
@@ -200,12 +201,12 @@ def get_augmented_params(lat_rep, resolution):
 
     return lat_rep_aug, camera_params_aug, phong_params_aug, light_params_aug
     
-def batch_forward(lat_rep_orig, prompt, batch_size, resolution):
+def batch_forward(lat_rep_orig, prompt, hparams):
     all_delta_CLIP_scores = []
     all_log_probs = []
     
-    for _ in range(batch_size):
-        lat_rep, camera_params, phong_params, light_params = get_augmented_params(lat_rep_orig, resolution)
+    for _ in range(hparams['batch_size']):
+        lat_rep, camera_params, phong_params, light_params = get_augmented_params(lat_rep_orig, hparams['resolution'], hparams['alpha'])
         delta_CLIP_score, log_prob, _ = forward(lat_rep, prompt, camera_params, phong_params, light_params)
         all_delta_CLIP_scores.append(delta_CLIP_score)
         all_log_probs.append(log_prob)
@@ -267,9 +268,16 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     with torch.no_grad():
         mean_image = render(decoder_shape, lat_mean, camera_params_opti, phong_params_opti, light_params_opti)
 
-    optimizer = Adam(params=[lat_rep],
+    if hparams['optimizer'] == 'Adam':
+        optimizer = Adam(params=[lat_rep],
                      lr=hparams['optimizer_lr'],
                      betas=(0.9, 0.999),
+                     weight_decay=0,
+                     maximize=True)
+    elif hparams['optimizer'] == 'EMA':
+        optimizer = EMA(params=[lat_rep],
+                     lr=hparams['optimizer_lr'],
+                     beta=hparams['EMA_beta'],
                      weight_decay=0,
                      maximize=True)
 
@@ -283,7 +291,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
     # Normal Mode
     now = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
-    writer = SummaryWriter(log_dir=f'../runs/refact/train-time:{now}')
+    writer = SummaryWriter(log_dir=f'../runs/Adam/train-time:{now}')
 
     best_score = torch.tensor([-torch.inf]).cpu()
     best_clip_score = torch.tensor([-torch.inf]).cpu()
@@ -302,7 +310,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     #prof.start()
     for iteration in tqdm(range(hparams['n_iterations'])):
     #prof.step()
-        batch_delta_CLIP_score, batch_log_prob_score = batch_forward(lat_rep, prompt, hparams['batch_size'], hparams['resolution'])
+        batch_delta_CLIP_score, batch_log_prob_score = batch_forward(lat_rep, prompt, hparams)
         batch_score = loss_fn(batch_delta_CLIP_score, batch_log_prob_score, hparams)
 
         if batch_score > best_score:
@@ -316,8 +324,9 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         batch_score.backward()
 
         # --- Validation with CLIP / DINO Delta Score ---
-        if (CLIP_gt != None) or (DINO_gt != None):
-            image = render(decoder_shape, lat_rep, camera_params_opti, phong_params_opti, light_params_opti)
+        #if (CLIP_gt != None) or (DINO_gt != None):
+        image = render(decoder_shape, lat_rep, camera_params_opti, phong_params_opti, light_params_opti)
+        writer.add_image(f'rendered image of {prompt}', image.detach().numpy(), iteration, dataformats='HWC')
         if CLIP_gt != None:
             CLIP_gt_similarity, CLIP_delta_sim = CLIP_similarity(image, CLIP_gt, mean_image)
             writer.add_scalar('CLIP similarity to ground truth image', CLIP_gt_similarity, iteration)
@@ -328,6 +337,8 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             writer.add_scalar('DINO similarity to ground truth image', DINO_gt_similarity, iteration)
             writer.add_scalar('DINO delta similarity', DINO_delta_sim, iteration)
         
+        # Manually modify the gradient to set NaN values to zero
+        lat_rep.grad[torch.isnan(lat_rep.grad)] = 0.0
         clip_grad_norm_([lat_rep], hparams['grad_norm'])
         gradient_lat_rep = lat_rep.grad
 
@@ -336,7 +347,6 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         writer.add_scalar('Batch Log Prob Score', batch_log_prob_score, iteration)
         writer.add_scalar('learning rate', optimizer.param_groups[0]['lr'], iteration)
         writer.add_scalar('Gradient norm of Score w.r.t. Latent', gradient_lat_rep.norm(), iteration)
-        writer.add_image(f'rendered image of {prompt}', image.detach().numpy(), iteration, dataformats='HWC')
 
         optimizer.step()
         lr_scheduler.step(batch_score)
@@ -344,6 +354,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         optimizer.zero_grad()          
 
     #prof.stop()
+    lat_rep_end = lat_rep.detach()
 
     writer.add_hparams(hparams, {
         'Best score': best_score,
@@ -351,7 +362,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         })
     writer.close()
 
-    return best_latent.detach(), best_clip_latent.detach()
+    return best_latent.detach(), best_clip_latent.detach(), lat_rep_end
     
     
     
