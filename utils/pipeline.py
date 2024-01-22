@@ -5,6 +5,7 @@ from torchvision.transforms import Compose, Normalize, Resize, CenterCrop, Inter
 from torch.nn.utils import clip_grad_value_, clip_grad_norm_
 import numpy as np
 import clip
+import open_clip
 import os
 import os.path as osp
 from NPHM.models.EnsembledDeepSDF import FastEnsembleDeepSDFMirrored
@@ -25,6 +26,8 @@ from utils.similarity import CLIP_similarity, DINO_similarity
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 CLIP_model, CLIP_preprocess = clip.load("ViT-B/32", device="cpu")
+#SigLIPmodel = open_clip.create_model("ViT-B-16-SigLIP", pretrained='webli', device="cpu")
+#tokenizer = open_clip.get_tokenizer('ViT-B-16-SigLIP')
 
 with open('../NPHM/scripts/configs/fitting_nphm.yaml', 'r') as f:
     CFG = yaml.safe_load(f)
@@ -66,23 +69,25 @@ lat_mean = torch.from_numpy(np.load(env_paths.ASSETS + 'nphm_lat_mean.npy'))
 lat_std = torch.from_numpy(np.load(env_paths.ASSETS + 'nphm_lat_std.npy'))
 
 def loss_fn(clip_score, prob_score, hparams):
-    return clip_score + hparams["lambda"] * prob_score
+    return (clip_score + hparams["lambda"] * prob_score) / (1 + hparams["lambda"])
 
 def get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params):
     image = render(decoder_shape, lat_rep, camera_params, phong_params, light_params)
     image_c_first = image.permute(2, 0, 1)
     image_preprocessed = clip_tensor_preprocessor(image_c_first).unsqueeze(0).cpu()
     CLIP_embedding_image = CLIP_model.encode_image(image_preprocessed) # [1, 512]
+    #CLIP_embedding_image = SigLIPmodel.encode_image(image_preprocessed)
     normalized_CLIP_embedding_image = CLIP_embedding_image / CLIP_embedding_image.norm(dim=-1, keepdim=True)
     
     return normalized_CLIP_embedding_image, image
 
 def get_text_clip_embedding(prompt):
     prompt_tokenized = clip.tokenize(prompt).cpu()
+    #prompt_tokenized = tokenizer(prompt).cpu()
     text_embedded = CLIP_model.encode_text(prompt_tokenized)
-    text_embedded_normalized = text_embedded / text_embedded.norm(dim=-1, keepdim=True)
+    #text_embedded = SigLIPmodel.encode_text(prompt_tokenized)
     
-    return text_embedded_normalized
+    return text_embedded
 
 def clip_score(image_embedding, text_embedding):
     return 100 * torch.matmul(image_embedding, text_embedding.T)
@@ -93,7 +98,6 @@ def log_prop_score(lat_rep):
     prob_score = -delta.T @ torch.inverse(cov) @ delta
     
     return prob_score
-    
 
 def forward(lat_rep, prompt, camera_params, phong_params, light_params):
     # --- Render Image from current Lat Rep + Embedd ---
@@ -110,10 +114,17 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
         delta_images_normalized = delta_images
 
     # --- Text Embedding ---
-    text_embedded_normalized = get_text_clip_embedding(prompt)
+    text_embedded = get_text_clip_embedding(prompt)
+    lat_mean_description = "A young man with oval face, convex facial profile, straight medium sized nose,low eyebrows, undefined jawline and short hair and no beard"
+    lat_mean_description_embedding = get_text_clip_embedding(lat_mean_description)
+    delta_text = text_embedded - lat_mean_description_embedding
+    if delta_text.norm() >= 1e-9:
+        delta_text_normalized = delta_text / delta_text.norm(dim=-1, keepdim=True)
+    else:
+        delta_text_normalized = delta_text
 
     # --- Delta CLIP Score ---
-    delta_CLIP_score = clip_score(delta_images_normalized, text_embedded_normalized)
+    delta_CLIP_score = clip_score(delta_images_normalized, delta_text_normalized)
     
     # --- Log Prob Score ---
     prob_score = log_prop_score(lat_rep)
