@@ -104,10 +104,11 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
     image_embedding, image = get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params)
     
     # --- Render Image from Lat Mean WITH SAME PARAMS AS LAT REP + Embedd ---
-    mean_image_embedding, _ = get_image_clip_embedding(lat_mean, camera_params, phong_params, light_params)
+    #mean_image_embedding, _ = get_image_clip_embedding(lat_mean, camera_params, phong_params, light_params)
     
     # --- Difference between both embeddings ---
-    delta_images = image_embedding - mean_image_embedding
+    #delta_images = image_embedding - mean_image_embedding
+    delta_images = image_embedding
     if delta_images.norm() >= 1e-9:
         delta_images_normalized = delta_images / delta_images.norm(dim=-1, keepdim=True)
     else:
@@ -115,9 +116,10 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
 
     # --- Text Embedding ---
     text_embedded = get_text_clip_embedding(prompt)
-    lat_mean_description = "A young man with oval face, convex facial profile, straight medium sized nose,low eyebrows, undefined jawline and short hair and no beard"
-    lat_mean_description_embedding = get_text_clip_embedding(lat_mean_description)
-    delta_text = text_embedded - lat_mean_description_embedding
+    #lat_mean_description = "A young man with oval face, convex facial profile, straight medium sized nose,low eyebrows, undefined jawline and short hair and no beard"
+    #lat_mean_description_embedding = get_text_clip_embedding(lat_mean_description)
+    #delta_text = text_embedded - lat_mean_description_embedding
+    delta_text = text_embedded
     if delta_text.norm() >= 1e-9:
         delta_text_normalized = delta_text / delta_text.norm(dim=-1, keepdim=True)
     else:
@@ -135,15 +137,15 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
 def energy_level(lat_rep_1, lat_rep_2, prompt, hparams, steps=100):
     with torch.no_grad():
         lat_reps = [torch.lerp(lat_rep_1, lat_rep_2, i) for i in torch.linspace(0., 1., steps)]
-        forwards = [batch_forward(lat_rep, prompt, hparams["batch_size"], hparams["resolution"]) for lat_rep in lat_reps]
+        forwards = [batch_forward(lat_rep, prompt, hparams) for lat_rep in lat_reps]
         energy = [loss_fn(f[0], f[1], hparams) for f in forwards]
     
     return energy, forwards
 
-def get_augmented_params(lat_rep, resolution):
+def get_augmented_params(lat_rep, hparams):
     # --- Latent Representation Augmentation ---
     # Generate random values from a normal distribution with standard deviation a
-    a = 0.005 #@simon
+    a = hparams["lat_pert"] #@simon
     random_multipliers = torch.randn(lat_std.shape) * a
     shift = lat_std * random_multipliers
     shift = shift.to(device)
@@ -159,8 +161,8 @@ def get_augmented_params(lat_rep, resolution):
         "focal_length": focal_length,
         "max_ray_length": 3,
         # Image
-        "resolution_y": resolution,
-        "resolution_x": resolution
+        "resolution_y": hparams["resolution"],
+        "resolution_x": hparams["resolution"]
     }
 
     # --- Phong Parameters Augmentation ---
@@ -211,12 +213,12 @@ def get_augmented_params(lat_rep, resolution):
 
     return lat_rep_aug, camera_params_aug, phong_params_aug, light_params_aug
     
-def batch_forward(lat_rep_orig, prompt, batch_size, resolution):
+def batch_forward(lat_rep_orig, prompt, hparams):
     all_delta_CLIP_scores = []
     all_log_probs = []
     
-    for _ in range(batch_size):
-        lat_rep, camera_params, phong_params, light_params = get_augmented_params(lat_rep_orig, resolution)
+    for _ in range(hparams["batch_size"]):
+        lat_rep, camera_params, phong_params, light_params = get_augmented_params(lat_rep_orig, hparams)
         delta_CLIP_score, log_prob, _ = forward(lat_rep, prompt, camera_params, phong_params, light_params)
         all_delta_CLIP_scores.append(delta_CLIP_score)
         all_log_probs.append(log_prob)
@@ -313,7 +315,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     #prof.start()
     for iteration in tqdm(range(hparams['n_iterations'])):
     #prof.step()
-        batch_delta_CLIP_score, batch_log_prob_score = batch_forward(lat_rep, prompt, hparams['batch_size'], hparams['resolution'])
+        batch_delta_CLIP_score, batch_log_prob_score = batch_forward(lat_rep, prompt, hparams)
         batch_score = loss_fn(batch_delta_CLIP_score, batch_log_prob_score, hparams)
 
         if batch_score > best_score:
@@ -339,7 +341,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             writer.add_scalar('DINO similarity to ground truth image', DINO_gt_similarity, iteration)
             writer.add_scalar('DINO delta similarity', DINO_delta_sim, iteration)
         
-        clip_grad_norm_([lat_rep], hparams['grad_norm'])
+        #clip_grad_norm_([lat_rep], hparams['grad_norm'])
         gradient_lat_rep = lat_rep.grad
 
         writer.add_scalar('Batch Score', batch_score, iteration)
