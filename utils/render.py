@@ -204,16 +204,18 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
         N = directions.shape[0]
         starting_positions = camera_position.unsqueeze(dim=0).repeat(N, 1) + first_step_length * directions
 
-        hits_1, hit_mask_1, _ = acc_sphere_trace(sdf, starting_positions, directions, camera_params['max_ray_length'], scale=np.sqrt(2.), eps=0.025)
+        hits, hit_mask, _ = acc_sphere_trace(sdf, starting_positions, directions, camera_params['max_ray_length'], scale=np.sqrt(2.), eps=0.001)
+
+        #hits_1, hit_mask_1, _ = acc_sphere_trace(sdf, starting_positions, directions, camera_params['max_ray_length'], scale=np.sqrt(2.), eps=0.025)
     
-    hits_2, hit_mask_2, _ = acc_sphere_trace(sdf, hits_1[hit_mask_1], directions[hit_mask_1], camera_params['max_ray_length'], scale=np.sqrt(2.), eps=0.001)
+        #hits_2, hit_mask_2, _ = acc_sphere_trace(sdf, hits_1[hit_mask_1], directions[hit_mask_1], camera_params['max_ray_length'], scale=np.sqrt(2.), eps=0.001)
             
 
-    hit_mask = torch.zeros(N).bool()
-    hit_mask[hit_mask_1] = hit_mask_2
+    #hit_mask = torch.zeros(N).bool()
+    #hit_mask[hit_mask_1] = hit_mask_2
 
-    hits = torch.zeros(N, 3)
-    hits[hit_mask] = hits_2[hit_mask_2]
+    #hits = torch.zeros(N, 3)
+    #hits[hit_mask] = hits_2[hit_mask_2]
 
     max_number = 80000000
     phong_points = hits[hit_mask]

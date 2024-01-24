@@ -67,7 +67,7 @@ lat_mean = torch.from_numpy(np.load(env_paths.ASSETS + 'nphm_lat_mean.npy'))
 lat_std = torch.from_numpy(np.load(env_paths.ASSETS + 'nphm_lat_std.npy'))
 
 def loss_fn(clip_score, prob_score, hparams):
-    return clip_score + hparams["lambda"] * prob_score
+    return (clip_score + hparams["lambda"] * prob_score) / (1 + hparams["lambda"])
 
 def get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params):
     lat_rep = lat_rep.to(device)
@@ -89,6 +89,23 @@ def get_text_clip_embedding(prompt):
 def clip_score(image_embedding, text_embedding):
     return 100 * torch.matmul(image_embedding, text_embedding.T)
 
+def std_factor_score(lat_rep):
+    distance = lat_rep.cpu() - lat_mean.cpu()
+    weighted_distance = distance / lat_std
+    distance_abs = weighted_distance.abs()
+    std_factor_score = distance_abs.mean()
+    return std_factor_score
+
+def penalty_score(lat_rep, a=0.065, b=2.5):
+    cov = lat_std * torch.eye(lat_mean.shape[0])
+    distance = lat_rep.cpu() - lat_mean.cpu()
+    weighted_distance = torch.inverse(cov.cpu()) @ distance
+    distance_abs = weighted_distance.abs()
+
+    penalized_tensor = -a * torch.exp(b * distance_abs)
+    penalty = penalized_tensor.mean()
+    return penalty
+
 def log_prop_score(lat_rep):
     cov = lat_std * torch.eye(lat_mean.shape[0])
     delta = lat_rep.cpu() - lat_mean.cpu()
@@ -100,7 +117,9 @@ def log_prop_score(lat_rep):
 def forward(lat_rep, prompt, camera_params, phong_params, light_params):
     # --- Render Image from current Lat Rep + Embedd ---
     image_embedding, image = get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params)
-    
+    ##
+    delta_images_normalized = image_embedding
+    '''
     # --- Render Image from Lat Mean WITH SAME PARAMS AS LAT REP + Embedd ---
     mean_image_embedding, _ = get_image_clip_embedding(lat_mean, camera_params, phong_params, light_params)
     
@@ -110,10 +129,10 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
         delta_images_normalized = delta_images / delta_images.norm(dim=-1, keepdim=True)
     else:
         delta_images_normalized = delta_images
-
+    '''
     # --- Text Embedding ---
     text_embedded_normalized = get_text_clip_embedding(prompt)
-
+    
     # --- Delta CLIP Score ---
     delta_CLIP_score = clip_score(delta_images_normalized, text_embedded_normalized)
     
@@ -125,8 +144,10 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
 
 def energy_level(lat_rep_1, lat_rep_2, prompt, hparams, steps=100):
     with torch.no_grad():
+        lat_rep_1 = lat_rep_1.cpu()
+        lat_rep_2 = lat_rep_2.cpu()
         lat_reps = [torch.lerp(lat_rep_1, lat_rep_2, i) for i in torch.linspace(0., 1., steps)]
-        forwards = [batch_forward(lat_rep, prompt, hparams["batch_size"], hparams["resolution"]) for lat_rep in lat_reps]
+        forwards = [batch_forward(lat_rep.to(device), prompt, hparams) for lat_rep in lat_reps]
         energy = [loss_fn(f[0], f[1], hparams) for f in forwards]
     
     return energy, forwards
@@ -142,7 +163,7 @@ def get_augmented_params(lat_rep, resolution, alpha):
     # --- Camera Parameters Augmentation ---
     camera_distance_factor = torch.rand(1).item() * 0.05 + 0.2 #random value [0.2, 0.25]
     focal_length = torch.rand(1).item() * 0.4 + 2.5 #random value [2.5, 3.3]
-    angle = float(torch.randint(-45, 90, (1,)).item()) # random int [-45, 90]
+    angle = float(torch.randint(-50, 90, (1,)).item()) # random int [-45, 90]
     camera_params_aug = {
         "camera_distance": camera_distance_factor * focal_length,
         "camera_angle": angle,
@@ -198,15 +219,41 @@ def get_augmented_params(lat_rep, resolution, alpha):
         "light_color_p": torch.tensor([0.8, 0.97, 0.89]),
         "light_pos_p": torch.tensor([light_pos_0, -1.27, 2.24])
     }
-
+    
     return lat_rep_aug, camera_params_aug, phong_params_aug, light_params_aug
     
 def batch_forward(lat_rep_orig, prompt, hparams):
     all_delta_CLIP_scores = []
     all_log_probs = []
     
-    for _ in range(hparams['batch_size']):
+    # --- Params for Determined Augmentation (not necessary for default = Random Augmentation) ---
+    angles = [45., -30., 90., 
+              -50., 35., -20., 
+              55., -40., 10.]
+    shift = hparams['alpha'] * lat_std
+    shift = shift.to(device)
+    lat_reps = [lat_rep_orig, (lat_rep_orig + shift), (lat_rep_orig - shift),
+               (lat_rep_orig + 0.5 * shift), (lat_rep_orig - 0.5 * shift), (lat_rep_orig + 0.3 *shift), (lat_rep_orig - 0.3 * shift)]
+    
+    for i in range(hparams['batch_size']):
+        # --- Random Augmentation ---
         lat_rep, camera_params, phong_params, light_params = get_augmented_params(lat_rep_orig, hparams['resolution'], hparams['alpha'])
+        
+        # --- Determined Augmentation ----
+        #lat_rep = lat_reps[i]
+        #lat_rep = lat_rep_orig
+        #lat_rep, _, _, _ = get_augmented_params(lat_rep_orig, hparams['resolution'], hparams['alpha'])
+        #camera_params, phong_params, light_params = get_optimal_params(hparams['resolution'])
+        #_, camera_params, phong_params, light_params = get_augmented_params(lat_rep_orig, hparams['resolution'], hparams['alpha'])
+        #camera_params['camera_angle'] = angles[i]
+        #if angles[i] >= 0:
+            #light_params['light_dir_1'] = torch.tensor([-0.6, -0.4, -0.67])
+            #light_params['light_pos_p'] = torch.tensor([1.19, -1.27, 2.24])
+        #else:
+            #light_params['light_dir_1'] = torch.tensor([0.6, -0.4, -0.67])
+            #light_params['light_pos_p'] = torch.tensor([-1.19, -1.27, 2.24])
+        
+        # --- Compute Scores ---
         delta_CLIP_score, log_prob, _ = forward(lat_rep, prompt, camera_params, phong_params, light_params)
         all_delta_CLIP_scores.append(delta_CLIP_score)
         all_log_probs.append(log_prob)
@@ -291,7 +338,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
     # Normal Mode
     now = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
-    writer = SummaryWriter(log_dir=f'../runs/Adam/train-time:{now}')
+    writer = SummaryWriter(log_dir=f'../runs/e/train-time:{now}')
 
     best_score = torch.tensor([-torch.inf]).cpu()
     best_clip_score = torch.tensor([-torch.inf]).cpu()
@@ -310,6 +357,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     #prof.start()
     for iteration in tqdm(range(hparams['n_iterations'])):
     #prof.step()
+        lat_rep_old = lat_rep.detach().cpu()
         batch_delta_CLIP_score, batch_log_prob_score = batch_forward(lat_rep, prompt, hparams)
         batch_score = loss_fn(batch_delta_CLIP_score, batch_log_prob_score, hparams)
 
@@ -324,9 +372,9 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         batch_score.backward()
 
         # --- Validation with CLIP / DINO Delta Score ---
-        #if (CLIP_gt != None) or (DINO_gt != None):
-        image = render(decoder_shape, lat_rep, camera_params_opti, phong_params_opti, light_params_opti)
-        writer.add_image(f'rendered image of {prompt}', image.detach().numpy(), iteration, dataformats='HWC')
+        if (CLIP_gt != None) or (DINO_gt != None):
+            image = render(decoder_shape, lat_rep, camera_params_opti, phong_params_opti, light_params_opti)
+            writer.add_image(f'rendered image of {prompt}', image.detach().numpy(), iteration, dataformats='HWC')
         if CLIP_gt != None:
             CLIP_gt_similarity, CLIP_delta_sim = CLIP_similarity(image, CLIP_gt, mean_image)
             writer.add_scalar('CLIP similarity to ground truth image', CLIP_gt_similarity, iteration)
@@ -339,17 +387,22 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         
         # Manually modify the gradient to set NaN values to zero
         lat_rep.grad[torch.isnan(lat_rep.grad)] = 0.0
-        clip_grad_norm_([lat_rep], hparams['grad_norm'])
+        #clip_grad_norm_([lat_rep], hparams['grad_norm'])
         gradient_lat_rep = lat_rep.grad
 
         writer.add_scalar('Batch Score', batch_score, iteration)
-        writer.add_scalar('Batch Delta CLIP Score', batch_delta_CLIP_score, iteration)
+        writer.add_scalar('Batch CLIP Score', batch_delta_CLIP_score, iteration)
         writer.add_scalar('Batch Log Prob Score', batch_log_prob_score, iteration)
         writer.add_scalar('learning rate', optimizer.param_groups[0]['lr'], iteration)
         writer.add_scalar('Gradient norm of Score w.r.t. Latent', gradient_lat_rep.norm(), iteration)
 
         optimizer.step()
         lr_scheduler.step(batch_score)
+
+        # Difference between lat_rep and previous lat_rep
+        lat_rep_diff = torch.abs(lat_rep.detach().cpu() - lat_rep_old) / lat_std.cpu()
+        mean_diff = torch.mean(lat_rep_diff.abs())
+        writer.add_scalar('Mean percentual diff wrt std dev', mean_diff, iteration)
 
         optimizer.zero_grad()          
 
@@ -362,7 +415,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         })
     writer.close()
 
-    return best_latent.detach(), best_clip_latent.detach(), lat_rep_end
+    return best_latent.detach(), best_clip_latent.detach(), lat_rep_end, best_score
     
     
     
