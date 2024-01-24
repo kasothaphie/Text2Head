@@ -4,10 +4,10 @@ import clip
 from transformers import AutoImageProcessor, AutoModel
 device = "cuda" if torch.cuda.is_available() else "cpu"
 # --- CLIP ---
-CLIP_model, CLIP_preprocess = clip.load("ViT-B/32", device="cpu")
+CLIP_model, CLIP_preprocess = clip.load("ViT-B/32", device=device)
 # --- DINO ---
 DINO_processor = AutoImageProcessor.from_pretrained('facebook/dinov2-base')
-DINO_model = AutoModel.from_pretrained('facebook/dinov2-base').to("cpu")
+DINO_model = AutoModel.from_pretrained('facebook/dinov2-base').to(device)
 
 
 def CLIP_similarity(image, gt_embedding, mean_image):

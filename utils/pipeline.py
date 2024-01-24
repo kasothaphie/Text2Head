@@ -5,7 +5,7 @@ from torchvision.transforms import Compose, Normalize, Resize, CenterCrop, Inter
 from torch.nn.utils import clip_grad_value_, clip_grad_norm_
 import numpy as np
 import clip
-import open_clip
+#import open_clip
 import os
 import os.path as osp
 from NPHM.models.EnsembledDeepSDF import FastEnsembleDeepSDFMirrored
@@ -140,7 +140,7 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
     text_embedded_normalized = get_text_clip_embedding(prompt)
     
     # --- Delta CLIP Score ---
-    delta_CLIP_score = clip_score(delta_images_normalized, delta_text_normalized)
+    delta_CLIP_score = clip_score(delta_images_normalized, text_embedded_normalized)
     
     # --- Log Prob Score ---
     prob_score = log_prop_score(lat_rep)
@@ -229,7 +229,6 @@ def get_augmented_params(lat_rep, hparams):
     return lat_rep_aug, camera_params_aug, phong_params_aug, light_params_aug
     
 def batch_forward(lat_rep_orig, prompt, hparams):
-def batch_forward(lat_rep_orig, prompt, hparams):
     all_delta_CLIP_scores = []
     all_log_probs = []
     
@@ -244,7 +243,7 @@ def batch_forward(lat_rep_orig, prompt, hparams):
     
     for i in range(hparams['batch_size']):
         # --- Random Augmentation ---
-        lat_rep, camera_params, phong_params, light_params = get_augmented_params(lat_rep_orig, hparams['resolution'], hparams['alpha'])
+        lat_rep, camera_params, phong_params, light_params = get_augmented_params(lat_rep_orig, hparams)
         
         # --- Determined Augmentation ----
         #lat_rep = lat_reps[i]
