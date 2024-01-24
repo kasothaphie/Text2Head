@@ -230,15 +230,15 @@ def batch_forward(lat_rep_orig, prompt, hparams):
 
     return batch_delta_CLIP_score, batch_log_prob    
 
-def get_optimal_params(resolution):
+def get_optimal_params(hparams):
     camera_params = {
         "camera_distance": 0.21 * 2.57,
         "camera_angle": 45.,
         "focal_length": 2.57,
         "max_ray_length": 3,
         # Image
-        "resolution_y": resolution,
-        "resolution_x": resolution
+        "resolution_y": hparams["resolution"],
+        "resolution_x": hparams["resolution"]
     }
     phong_params = {
         "ambient_coeff": 0.51,
@@ -276,7 +276,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     lat_mean = lat_mean.to(device)
 
     # --- Get Mean Image (required for CLIP and DINO validation) ---
-    camera_params_opti, phong_params_opti, light_params_opti = get_optimal_params(hparams['resolution'])
+    camera_params_opti, phong_params_opti, light_params_opti = get_optimal_params(hparams)
     with torch.no_grad():
         mean_image = render(decoder_shape, lat_mean, camera_params_opti, phong_params_opti, light_params_opti)
 
@@ -327,6 +327,8 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             best_clip_latent = torch.clone(lat_rep).cpu()
 
         batch_score.backward()
+        
+        lat_rep.grad = lat_rep.grad.nan_to_num(0.)
 
         # --- Validation with CLIP / DINO Delta Score ---
         #if (CLIP_gt != None) or (DINO_gt != None):
