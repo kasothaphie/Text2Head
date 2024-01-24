@@ -213,7 +213,11 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
 
     #hit_mask = torch.zeros(N).bool()
     #hit_mask[hit_mask_1] = hit_mask_2
+    #hit_mask = torch.zeros(N).bool()
+    #hit_mask[hit_mask_1] = hit_mask_2
 
+    #hits = torch.zeros(N, 3)
+    #hits[hit_mask] = hits_2[hit_mask_2]
     #hits = torch.zeros(N, 3)
     #hits[hit_mask] = hits_2[hit_mask_2]
 

@@ -5,6 +5,7 @@ from torchvision.transforms import Compose, Normalize, Resize, CenterCrop, Inter
 from torch.nn.utils import clip_grad_value_, clip_grad_norm_
 import numpy as np
 import clip
+import open_clip
 import os
 import os.path as osp
 from NPHM.models.EnsembledDeepSDF import FastEnsembleDeepSDFMirrored
@@ -26,6 +27,8 @@ from utils.EMA import EMA
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 CLIP_model, CLIP_preprocess = clip.load("ViT-B/32", device="cpu")
+#SigLIPmodel = open_clip.create_model("ViT-B-16-SigLIP", pretrained='webli', device="cpu")
+#tokenizer = open_clip.get_tokenizer('ViT-B-16-SigLIP')
 
 with open('../NPHM/scripts/configs/fitting_nphm.yaml', 'r') as f:
     CFG = yaml.safe_load(f)
@@ -68,6 +71,7 @@ lat_std = torch.from_numpy(np.load(env_paths.ASSETS + 'nphm_lat_std.npy'))
 
 def loss_fn(clip_score, prob_score, hparams):
     return (clip_score + hparams["lambda"] * prob_score) / (1 + hparams["lambda"])
+    return (clip_score + hparams["lambda"] * prob_score) / (1 + hparams["lambda"])
 
 def get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params):
     lat_rep = lat_rep.to(device)
@@ -75,16 +79,18 @@ def get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params)
     image_c_first = image.permute(2, 0, 1)
     image_preprocessed = clip_tensor_preprocessor(image_c_first).unsqueeze(0).cpu()
     CLIP_embedding_image = CLIP_model.encode_image(image_preprocessed) # [1, 512]
+    #CLIP_embedding_image = SigLIPmodel.encode_image(image_preprocessed)
     normalized_CLIP_embedding_image = CLIP_embedding_image / CLIP_embedding_image.norm(dim=-1, keepdim=True)
     
     return normalized_CLIP_embedding_image, image
 
 def get_text_clip_embedding(prompt):
     prompt_tokenized = clip.tokenize(prompt).cpu()
+    #prompt_tokenized = tokenizer(prompt).cpu()
     text_embedded = CLIP_model.encode_text(prompt_tokenized)
-    text_embedded_normalized = text_embedded / text_embedded.norm(dim=-1, keepdim=True)
+    #text_embedded = SigLIPmodel.encode_text(prompt_tokenized)
     
-    return text_embedded_normalized
+    return text_embedded
 
 def clip_score(image_embedding, text_embedding):
     return 100 * torch.matmul(image_embedding, text_embedding.T)
@@ -112,7 +118,6 @@ def log_prop_score(lat_rep):
     prob_score = -delta.T @ torch.inverse(cov.cpu()) @ delta
     
     return prob_score
-    
 
 def forward(lat_rep, prompt, camera_params, phong_params, light_params):
     # --- Render Image from current Lat Rep + Embedd ---
@@ -121,10 +126,11 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
     delta_images_normalized = image_embedding
     '''
     # --- Render Image from Lat Mean WITH SAME PARAMS AS LAT REP + Embedd ---
-    mean_image_embedding, _ = get_image_clip_embedding(lat_mean, camera_params, phong_params, light_params)
+    #mean_image_embedding, _ = get_image_clip_embedding(lat_mean, camera_params, phong_params, light_params)
     
     # --- Difference between both embeddings ---
-    delta_images = image_embedding - mean_image_embedding
+    #delta_images = image_embedding - mean_image_embedding
+    delta_images = image_embedding
     if delta_images.norm() >= 1e-9:
         delta_images_normalized = delta_images / delta_images.norm(dim=-1, keepdim=True)
     else:
@@ -134,7 +140,7 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
     text_embedded_normalized = get_text_clip_embedding(prompt)
     
     # --- Delta CLIP Score ---
-    delta_CLIP_score = clip_score(delta_images_normalized, text_embedded_normalized)
+    delta_CLIP_score = clip_score(delta_images_normalized, delta_text_normalized)
     
     # --- Log Prob Score ---
     prob_score = log_prop_score(lat_rep)
@@ -152,10 +158,10 @@ def energy_level(lat_rep_1, lat_rep_2, prompt, hparams, steps=100):
     
     return energy, forwards
 
-def get_augmented_params(lat_rep, resolution, alpha):
+def get_augmented_params(lat_rep, hparams):
     # --- Latent Representation Augmentation ---
     # Generate random values from a normal distribution with standard deviation a
-    random_multipliers = torch.randn(lat_std.shape) * alpha
+    random_multipliers = torch.randn(lat_std.shape) * hparams["alpha"]
     shift = lat_std * random_multipliers
     shift = shift.to(device)
     lat_rep_aug = lat_rep + shift
@@ -170,8 +176,8 @@ def get_augmented_params(lat_rep, resolution, alpha):
         "focal_length": focal_length,
         "max_ray_length": 3,
         # Image
-        "resolution_y": resolution,
-        "resolution_x": resolution
+        "resolution_y": hparams["resolution"],
+        "resolution_x": hparams["resolution"]
     }
 
     # --- Phong Parameters Augmentation ---
@@ -223,6 +229,7 @@ def get_augmented_params(lat_rep, resolution, alpha):
     return lat_rep_aug, camera_params_aug, phong_params_aug, light_params_aug
     
 def batch_forward(lat_rep_orig, prompt, hparams):
+def batch_forward(lat_rep_orig, prompt, hparams):
     all_delta_CLIP_scores = []
     all_log_probs = []
     
@@ -265,15 +272,15 @@ def batch_forward(lat_rep_orig, prompt, hparams):
 
     return batch_delta_CLIP_score, batch_log_prob    
 
-def get_optimal_params(resolution):
+def get_optimal_params(hparams):
     camera_params = {
         "camera_distance": 0.21 * 2.57,
         "camera_angle": 45.,
         "focal_length": 2.57,
         "max_ray_length": 3,
         # Image
-        "resolution_y": resolution,
-        "resolution_x": resolution
+        "resolution_y": hparams["resolution"],
+        "resolution_x": hparams["resolution"]
     }
     phong_params = {
         "ambient_coeff": 0.51,
@@ -311,7 +318,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     lat_mean = lat_mean.to(device)
 
     # --- Get Mean Image (required for CLIP and DINO validation) ---
-    camera_params_opti, phong_params_opti, light_params_opti = get_optimal_params(hparams['resolution'])
+    camera_params_opti, phong_params_opti, light_params_opti = get_optimal_params(hparams)
     with torch.no_grad():
         mean_image = render(decoder_shape, lat_mean, camera_params_opti, phong_params_opti, light_params_opti)
 
@@ -370,11 +377,15 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             best_clip_latent = torch.clone(lat_rep).cpu()
 
         batch_score.backward()
+        
+        # Manually modify the gradient to set NaN values to zero
+        lat_rep.grad = lat_rep.grad.nan_to_num(0.)
 
         # --- Validation with CLIP / DINO Delta Score ---
         if (CLIP_gt != None) or (DINO_gt != None):
             image = render(decoder_shape, lat_rep, camera_params_opti, phong_params_opti, light_params_opti)
             writer.add_image(f'rendered image of {prompt}', image.detach().numpy(), iteration, dataformats='HWC')
+        
         if CLIP_gt != None:
             CLIP_gt_similarity, CLIP_delta_sim = CLIP_similarity(image, CLIP_gt, mean_image)
             writer.add_scalar('CLIP similarity to ground truth image', CLIP_gt_similarity, iteration)
@@ -385,8 +396,6 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             writer.add_scalar('DINO similarity to ground truth image', DINO_gt_similarity, iteration)
             writer.add_scalar('DINO delta similarity', DINO_delta_sim, iteration)
         
-        # Manually modify the gradient to set NaN values to zero
-        lat_rep.grad[torch.isnan(lat_rep.grad)] = 0.0
         #clip_grad_norm_([lat_rep], hparams['grad_norm'])
         gradient_lat_rep = lat_rep.grad
 
