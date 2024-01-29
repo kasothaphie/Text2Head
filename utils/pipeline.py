@@ -142,7 +142,6 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
     
     # --- Delta CLIP Score ---
     delta_CLIP_score = clip_score(delta_images_normalized, text_embedded_normalized)
-    print('delta_clip_score ',  delta_CLIP_score)
     
     # --- Log Prob Score ---
     prob_score = log_prop_score(lat_rep)
