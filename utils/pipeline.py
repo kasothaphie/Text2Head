@@ -1,5 +1,6 @@
 import yaml
 import torch
+import sys
 from torch.optim import Adam
 from torchvision.transforms import Compose, Normalize, Resize, CenterCrop, InterpolationMode
 from torch.nn.utils import clip_grad_value_, clip_grad_norm_
@@ -71,7 +72,6 @@ lat_std = torch.from_numpy(np.load(env_paths.ASSETS + 'nphm_lat_std.npy'))
 
 def loss_fn(clip_score, prob_score, hparams):
     return (clip_score + hparams["lambda"] * prob_score) / (1 + hparams["lambda"])
-    return (clip_score + hparams["lambda"] * prob_score) / (1 + hparams["lambda"])
 
 def get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params):
     lat_rep = lat_rep.to(device)
@@ -89,8 +89,9 @@ def get_text_clip_embedding(prompt):
     #prompt_tokenized = tokenizer(prompt).cpu()
     text_embedded = CLIP_model.encode_text(prompt_tokenized)
     #text_embedded = SigLIPmodel.encode_text(prompt_tokenized)
+    normalized_CLIP_embedding_text = text_embedded / text_embedded.norm(dim=-1, keepdim=True)
     
-    return text_embedded
+    return normalized_CLIP_embedding_text
 
 def clip_score(image_embedding, text_embedding):
     return 100 * torch.matmul(image_embedding, text_embedding.T)
@@ -141,6 +142,7 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
     
     # --- Delta CLIP Score ---
     delta_CLIP_score = clip_score(delta_images_normalized, text_embedded_normalized)
+    print('delta_clip_score ',  delta_CLIP_score)
     
     # --- Log Prob Score ---
     prob_score = log_prop_score(lat_rep)
@@ -248,9 +250,9 @@ def batch_forward(lat_rep_orig, prompt, hparams):
         # --- Determined Augmentation ----
         #lat_rep = lat_reps[i]
         #lat_rep = lat_rep_orig
-        #lat_rep, _, _, _ = get_augmented_params(lat_rep_orig, hparams['resolution'], hparams['alpha'])
-        #camera_params, phong_params, light_params = get_optimal_params(hparams['resolution'])
-        #_, camera_params, phong_params, light_params = get_augmented_params(lat_rep_orig, hparams['resolution'], hparams['alpha'])
+        #lat_rep, _, _, _ = get_augmented_params(lat_rep_orig, hparams)
+        #camera_params, phong_params, light_params = get_optimal_params(hparams)
+        #_, camera_params, phong_params, light_params = get_augmented_params(lat_rep_orig, hparams)
         #camera_params['camera_angle'] = angles[i]
         #if angles[i] >= 0:
             #light_params['light_dir_1'] = torch.tensor([-0.6, -0.4, -0.67])
@@ -344,7 +346,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
     # Normal Mode
     now = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
-    writer = SummaryWriter(log_dir=f'../runs/e/train-time:{now}')
+    writer = SummaryWriter(log_dir=f'../runs/a/train-time:{now}')
 
     best_score = torch.tensor([-torch.inf]).cpu()
     best_clip_score = torch.tensor([-torch.inf]).cpu()
@@ -365,6 +367,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     #prof.step()
         lat_rep_old = lat_rep.detach().cpu()
         batch_delta_CLIP_score, batch_log_prob_score = batch_forward(lat_rep, prompt, hparams)
+        sys.stdout.flush()
         batch_score = loss_fn(batch_delta_CLIP_score, batch_log_prob_score, hparams)
 
         if batch_score > best_score:
