@@ -1,0 +1,47 @@
+# Note: conda dependencies have only 1 "="
+#       pip dependencies have 2 "=="
+# Fuse pip dependencies together under one " - pip" item
+#       Otherwise, only some of the are installed, because conda creates a temporary requirements.txt file
+#       only the last -pip section
+
+name: NPHM-TUM
+
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  #- fvcore
+  #- iopath
+  #- pytorch3d
+
+dependencies:
+  - python=3.9
+  - pip
+
+    # CUDA
+  #- cudatoolkit
+  #- cuda-nvcc
+  #- cuda-libraries-dev
+  #- ninja
+  #- fvcore
+  #- iopath
+  #- pytorch=2.0.1
+  #- torchvision=0.15.2
+  #- pytorch-cuda=11.7
+  #- pytorch3d=0.7.4
+
+  - pip:
+      # Torch
+      #- einops
+      #- torch_geometric==2.3.1
+      #- git+https://github.com/pyg-team/pyg-lib.git
+      #- torch_scatter
+      #- torch_sparse
+      #- torch_cluster
+      - dreifus
+      - tyro
+      - pymcubes
+      - trimesh
+      - pyvista
+      - pymeshlab
+      - chardet

@@ -1,0 +1,4 @@
+build/
+__pycache__/
+*egg-info/
+/src/nphm_tum/env_paths.py
