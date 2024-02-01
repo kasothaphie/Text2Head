@@ -1,13 +1,13 @@
 import yaml
 import torch
 import sys
+import json
 from torch.optim import Adam
 from torchvision.transforms import Compose, Normalize, Resize, CenterCrop, InterpolationMode
 from torch.nn.utils import clip_grad_value_, clip_grad_norm_
 import numpy as np
 import clip
 #import open_clip
-import os
 import os.path as osp
 from NPHM.models.EnsembledDeepSDF import FastEnsembleDeepSDFMirrored
 from NPHM import env_paths
@@ -15,8 +15,9 @@ import matplotlib.pyplot as plt
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
 from tqdm import tqdm
-import uuid
-import random
+
+from nphm_tum import env_paths as mono_env_paths
+from nphm_tum.models.neural3dmm import construct_n3dmm, load_checkpoint
 
 from torch.profiler import profile, record_function, ProfilerActivity
 
@@ -26,39 +27,87 @@ from utils.EMA import EMA
 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
+mode = "nphm" # else mono_nphm
 
 CLIP_model, CLIP_preprocess = clip.load("ViT-B/32", device="cpu")
 #SigLIPmodel = open_clip.create_model("ViT-B-16-SigLIP", pretrained='webli', device="cpu")
 #tokenizer = open_clip.get_tokenizer('ViT-B-16-SigLIP')
 
-with open('../NPHM/scripts/configs/fitting_nphm.yaml', 'r') as f:
-    CFG = yaml.safe_load(f)
+if mode == "nphm":
+    with open('../NPHM/scripts/configs/fitting_nphm.yaml', 'r') as f:
+        CFG = yaml.safe_load(f)
+        
+    weight_dir_shape = env_paths.EXPERIMENT_DIR + '/{}/'.format(CFG['exp_name_shape'])
+    fname_shape = weight_dir_shape + 'configs.yaml'
+    with open(fname_shape, 'r') as f:
+        CFG_shape = yaml.safe_load(f)
+        
+
+    lm_inds = np.load(env_paths.ANCHOR_INDICES_PATH)
+    anchors = torch.from_numpy(np.load(env_paths.ANCHOR_MEAN_PATH)).float().unsqueeze(0).unsqueeze(0).to(device)
+
+    decoder_shape = FastEnsembleDeepSDFMirrored(
+            lat_dim_glob=CFG_shape['decoder']['decoder_lat_dim_glob'],
+            lat_dim_loc=CFG_shape['decoder']['decoder_lat_dim_loc'],
+            hidden_dim=CFG_shape['decoder']['decoder_hidden_dim'],
+            n_loc=CFG_shape['decoder']['decoder_nloc'],
+            n_symm_pairs=CFG_shape['decoder']['decoder_nsymm_pairs'],
+            anchors=anchors,
+            n_layers=CFG_shape['decoder']['decoder_nlayers'],
+            pos_mlp_dim=CFG_shape['decoder'].get('pos_mlp_dim', 256),
+        )
+
+    decoder_shape = decoder_shape.to(device)
+
+    path = osp.join(weight_dir_shape, 'checkpoints/checkpoint_epoch_{}.tar'.format(CFG['checkpoint_shape']))
+    model_checkpoint = torch.load(path, map_location=device)
+    decoder_shape.load_state_dict(model_checkpoint['decoder_state_dict'], strict=True)
     
-weight_dir_shape = env_paths.EXPERIMENT_DIR + '/{}/'.format(CFG['exp_name_shape'])
-fname_shape = weight_dir_shape + 'configs.yaml'
-with open(fname_shape, 'r') as f:
-    CFG_shape = yaml.safe_load(f)
+    def sdf(sdf_inputs, lat_rep):
+        lat_rep_in = torch.reshape(lat_rep[0], (1, 1, -1))
+        return decoder_shape(sdf_inputs, lat_rep_in, None)[0]
     
+elif mode == "mono_nphm":
+    weight_dir_shape = mono_env_paths.EXPERIMENT_DIR_REMOTE + '/'
+    fname_shape = weight_dir_shape + 'configs.yaml'
+    with open(fname_shape, 'r') as f:
+        CFG = yaml.safe_load(f)
 
-lm_inds = np.load(env_paths.ANCHOR_INDICES_PATH)
-anchors = torch.from_numpy(np.load(env_paths.ANCHOR_MEAN_PATH)).float().unsqueeze(0).unsqueeze(0).to(device)
+    # load participant IDs that were used for training
+    fname_subject_index = f"{weight_dir_shape}/subject_train_index.json"
+    with open(fname_subject_index, 'r') as f:
+        subject_index = json.load(f)
 
-decoder_shape = FastEnsembleDeepSDFMirrored(
-        lat_dim_glob=CFG_shape['decoder']['decoder_lat_dim_glob'],
-        lat_dim_loc=CFG_shape['decoder']['decoder_lat_dim_loc'],
-        hidden_dim=CFG_shape['decoder']['decoder_hidden_dim'],
-        n_loc=CFG_shape['decoder']['decoder_nloc'],
-        n_symm_pairs=CFG_shape['decoder']['decoder_nsymm_pairs'],
-        anchors=anchors,
-        n_layers=CFG_shape['decoder']['decoder_nlayers'],
-        pos_mlp_dim=CFG_shape['decoder'].get('pos_mlp_dim', 256),
-    )
+    # load expression indices that were used for training
+    fname_subject_index = f"{weight_dir_shape}/expression_train_index.json"
+    with open(fname_subject_index, 'r') as f:
+        expression_index = json.load(f)
 
-decoder_shape = decoder_shape.to(device)
 
-path = osp.join(weight_dir_shape, 'checkpoints/checkpoint_epoch_{}.tar'.format(CFG['checkpoint_shape']))
-model_checkpoint = torch.load(path, map_location=device)
-decoder_shape.load_state_dict(model_checkpoint['decoder_state_dict'], strict=True)
+    # construct the NPHM models and latent codebook
+    neural_3dmm, latent_codes = construct_n3dmm(
+        cfg = CFG,
+        modalities=['geo', 'exp'],
+        n_latents=[len(subject_index), len(expression_index)],
+        device=device
+        )
+
+    # load checkpoint from trained NPHM model, including the latent codes
+    ckpt_path = osp.join(weight_dir_shape, 'checkpoints/checkpoint_epoch_6500.tar')
+    load_checkpoint(ckpt_path, neural_3dmm, latent_codes)
+        
+    def sdf(sdf_inputs, lat_rep):
+        dict_in = {
+            "queries":sdf_inputs
+        }
+        cond = {
+            "geo": torch.reshape(lat_rep[0], (1, 1, -1)),
+            "exp": torch.reshape(lat_rep[1], (1, 1, -1))
+        }
+        return neural_3dmm(dict_in, cond)["sdf"]
+            
+else:
+    raise ValueError(f"unknown mode: {mode}")
 
 #from clip preprocessing
 clip_tensor_preprocessor = Compose([
@@ -67,15 +116,24 @@ clip_tensor_preprocessor = Compose([
     Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
 ])
 
-lat_mean = torch.from_numpy(np.load(env_paths.ASSETS + 'nphm_lat_mean.npy'))
-lat_std = torch.from_numpy(np.load(env_paths.ASSETS + 'nphm_lat_std.npy'))
+if mode == "nphm":
+    lat_mean = torch.from_numpy(np.load(env_paths.ASSETS + 'nphm_lat_mean.npy'))
+    lat_std = torch.from_numpy(np.load(env_paths.ASSETS + 'nphm_lat_std.npy'))
+elif mode == "mono_nphm":
+    geo_mean = latent_codes.codebook['geo'].embedding.weight.mean(dim=0)
+    geo_std = latent_codes.codebook['geo'].embedding.weight.std(dim=0)
+    exp_mean = latent_codes.codebook['exp'].embedding.weight.mean(dim=0)
+    exp_std = latent_codes.codebook['exp'].embedding.weight.std(dim=0)
+else:
+    raise ValueError(f"unknown mode: {mode}")
+
 
 def loss_fn(clip_score, prob_score, hparams):
     return (clip_score + hparams["lambda"] * prob_score) / (1 + hparams["lambda"])
 
 def get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params):
     lat_rep = lat_rep.to(device)
-    image = render(decoder_shape, lat_rep, camera_params, phong_params, light_params)
+    image = render(sdf, lat_rep, camera_params, phong_params, light_params)
     image_c_first = image.permute(2, 0, 1)
     image_preprocessed = clip_tensor_preprocessor(image_c_first).unsqueeze(0).cpu()
     CLIP_embedding_image = CLIP_model.encode_image(image_preprocessed) # [1, 512]
@@ -320,7 +378,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     # --- Get Mean Image (required for CLIP and DINO validation) ---
     camera_params_opti, phong_params_opti, light_params_opti = get_optimal_params(hparams)
     with torch.no_grad():
-        mean_image = render(decoder_shape, lat_mean, camera_params_opti, phong_params_opti, light_params_opti)
+        mean_image = render(sdf, lat_mean, camera_params_opti, phong_params_opti, light_params_opti)
 
     if hparams['optimizer'] == 'Adam':
         optimizer = Adam(params=[lat_rep],
@@ -384,7 +442,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
         # --- Validation with CLIP / DINO Delta Score ---
         if (CLIP_gt != None) or (DINO_gt != None):
-            image = render(decoder_shape, lat_rep, camera_params_opti, phong_params_opti, light_params_opti)
+            image = render(sdf, lat_rep, camera_params_opti, phong_params_opti, light_params_opti)
             writer.add_image(f'rendered image of {prompt}', image.detach().numpy(), iteration, dataformats='HWC')
         
         if CLIP_gt != None:
