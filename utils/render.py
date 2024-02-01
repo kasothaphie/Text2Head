@@ -155,19 +155,18 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
     
         def get_sdf(nphm_input, lat_rep_in):
             #distance = model(nphm_input.to(device), lat_rep_in, None)[0].to("cpu")
-            distance = checkpoint(model, *[nphm_input.to(device), lat_rep_in, None])[0].to("cpu")
+            distance = checkpoint(model, *[nphm_input.to(device), lat_rep_in]).to("cpu")
             return distance.squeeze()
             
         nphm_input = torch.reshape(positions, (1, -1, 3))
-        lat_rep_in = torch.reshape(lat_rep, (1, 1, -1))
         
         if nphm_input.shape[1] > chunk_size:
             chunked = torch.chunk(nphm_input, chunks=nphm_input.shape[1] // chunk_size, dim=1)
-            distances = [get_sdf(chunk, lat_rep_in) for chunk in chunked]
+            distances = [get_sdf(chunk, lat_rep) for chunk in chunked]
             return torch.cat(distances, dim=0)
         else:
             #distance = model(nphm_input.to(device), lat_rep_in.to(device).requires_grad_(True), None)[0].to("cpu")
-            distance = get_sdf(nphm_input, lat_rep_in)
+            distance = get_sdf(nphm_input, lat_rep)
             return distance
 
     pu = camera_params["resolution_x"]
