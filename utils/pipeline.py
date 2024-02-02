@@ -27,7 +27,7 @@ from utils.EMA import EMA
 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-mode = "nphm" # else mono_nphm
+mode = "mono_nphm" # nphm, else mono_nphm
 
 CLIP_model, CLIP_preprocess = clip.load("ViT-B/32", device="cpu")
 #SigLIPmodel = open_clip.create_model("ViT-B-16-SigLIP", pretrained='webli', device="cpu")
@@ -128,11 +128,10 @@ else:
     raise ValueError(f"unknown mode: {mode}")
 
 
-def loss_fn(clip_score, prob_score, hparams):
-    return (clip_score + hparams["lambda"] * prob_score) / (1 + hparams["lambda"])
+def loss_fn(clip_score, prob_geo_score, prob_exp_score, hparams):
+    return (clip_score + hparams["lambda"] * (prob_geo_score + prob_exp_score)) / (1 + hparams["lambda"])
 
 def get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params):
-    lat_rep = lat_rep.to(device)
     image = render(sdf, lat_rep, camera_params, phong_params, light_params)
     image_c_first = image.permute(2, 0, 1)
     image_preprocessed = clip_tensor_preprocessor(image_c_first).unsqueeze(0).cpu()
@@ -172,11 +171,24 @@ def penalty_score(lat_rep, a=0.065, b=2.5):
     return penalty
 
 def log_prop_score(lat_rep):
-    cov = lat_std * torch.eye(lat_mean.shape[0])
-    delta = lat_rep.cpu() - lat_mean.cpu()
-    prob_score = -delta.T @ torch.inverse(cov.cpu()) @ delta
+    if mode == 'nphm':
+        cov = lat_std * torch.eye(lat_mean.shape[0])
+        delta = lat_rep.cpu() - lat_mean.cpu() # [1344]
+        prob_geo = -delta.T @ torch.inverse(cov.cpu()) @ delta
+        prob_exp = None
+    elif mode == 'mono_nphm':
+        # --- Probability of latent geometry code ---
+        geo_rep = torch.reshape(lat_rep[0], (-1,)) # [1344] 
+        cov_geo = geo_std.cpu() * torch.eye(geo_mean.shape[0])
+        delta_geo = geo_rep.cpu() - geo_mean.cpu() 
+        prob_geo = -delta_geo.T @ torch.inverse(cov_geo.cpu()) @ delta_geo
+        # --- Probability of latent expression code ---
+        exp_rep = torch.reshape(lat_rep[1], (-1,)) # [200] 
+        cov_exp = exp_std.cpu() * torch.eye(exp_mean.shape[0])
+        delta_exp = exp_rep.cpu() - exp_mean.cpu() 
+        prob_exp = -delta_exp.T @ torch.inverse(cov_exp.cpu()) @ delta_exp
     
-    return prob_score
+    return prob_geo, prob_exp
 
 def forward(lat_rep, prompt, camera_params, phong_params, light_params):
     # --- Render Image from current Lat Rep + Embedd ---
@@ -202,9 +214,9 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params):
     delta_CLIP_score = clip_score(delta_images_normalized, text_embedded_normalized)
     
     # --- Log Prob Score ---
-    prob_score = log_prop_score(lat_rep)
+    prob_geo, prob_exp = log_prop_score(lat_rep)
 
-    return delta_CLIP_score, prob_score, torch.clone(image)
+    return delta_CLIP_score, prob_geo, prob_exp, torch.clone(image)
 
 
 def energy_level(lat_rep_1, lat_rep_2, prompt, hparams, steps=100):
@@ -219,11 +231,18 @@ def energy_level(lat_rep_1, lat_rep_2, prompt, hparams, steps=100):
 
 def get_augmented_params(lat_rep, hparams):
     # --- Latent Representation Augmentation ---
-    # Generate random values from a normal distribution with standard deviation a
-    random_multipliers = torch.randn(lat_std.shape) * hparams["alpha"]
-    shift = lat_std * random_multipliers
-    shift = shift.to(device)
-    lat_rep_aug = lat_rep + shift
+    # Generate random values from a normal distribution with standard deviation alpha
+    random_multipliers_geo = torch.randn(geo_std.shape) * hparams["alpha"]
+    shift_geo = geo_std.cpu() * random_multipliers_geo
+    shift_geo = shift_geo.to(device)
+    lat_geo_aug = lat_rep[0] + shift_geo
+
+    random_multipliers_exp = torch.randn(exp_std.shape) * hparams["alpha"]
+    shift_exp = exp_std.cpu() * random_multipliers_exp
+    shift_exp = shift_exp.to(device)
+    lat_exp_aug = lat_rep[1] + shift_exp
+
+    lat_rep_aug = [lat_geo_aug, lat_exp_aug]
 
     # --- Camera Parameters Augmentation ---
     camera_distance_factor = torch.rand(1).item() * 0.05 + 0.2 #random value [0.2, 0.25]
@@ -289,16 +308,17 @@ def get_augmented_params(lat_rep, hparams):
     
 def batch_forward(lat_rep_orig, prompt, hparams):
     all_delta_CLIP_scores = []
-    all_log_probs = []
+    all_log_probs_geo = []
+    all_log_probs_exp = []
     
     # --- Params for Determined Augmentation (not necessary for default = Random Augmentation) ---
     angles = [45., -30., 90., 
               -50., 35., -20., 
               55., -40., 10.]
-    shift = hparams['alpha'] * lat_std
-    shift = shift.to(device)
-    lat_reps = [lat_rep_orig, (lat_rep_orig + shift), (lat_rep_orig - shift),
-               (lat_rep_orig + 0.5 * shift), (lat_rep_orig - 0.5 * shift), (lat_rep_orig + 0.3 *shift), (lat_rep_orig - 0.3 * shift)]
+    #shift = hparams['alpha'] * lat_std
+    #shift = shift.to(device)
+    #lat_reps = [lat_rep_orig, (lat_rep_orig + shift), (lat_rep_orig - shift),
+               #(lat_rep_orig + 0.5 * shift), (lat_rep_orig - 0.5 * shift), (lat_rep_orig + 0.3 *shift), (lat_rep_orig - 0.3 * shift)]
     
     for i in range(hparams['batch_size']):
         # --- Random Augmentation ---
@@ -319,16 +339,19 @@ def batch_forward(lat_rep_orig, prompt, hparams):
             #light_params['light_pos_p'] = torch.tensor([-1.19, -1.27, 2.24])
         
         # --- Compute Scores ---
-        delta_CLIP_score, log_prob, _ = forward(lat_rep, prompt, camera_params, phong_params, light_params)
+        delta_CLIP_score, log_prob_geo, log_prob_exp, _ = forward(lat_rep, prompt, camera_params, phong_params, light_params)
         all_delta_CLIP_scores.append(delta_CLIP_score)
-        all_log_probs.append(log_prob)
+        all_log_probs_geo.append(log_prob_geo)
+        all_log_probs_exp.append(log_prob_exp)
     
     all_delta_CLIP_scores_tensor = torch.stack(all_delta_CLIP_scores)
-    all_log_probs_tensor = torch.stack(all_log_probs)
+    all_log_probs_geo_tensor = torch.stack(all_log_probs_geo)
+    all_log_probs_exp_tensor = torch.stack(all_log_probs_exp)
     batch_delta_CLIP_score = torch.mean(all_delta_CLIP_scores_tensor)
-    batch_log_prob = torch.mean(all_log_probs_tensor)
+    batch_log_prob_geo = torch.mean(all_log_probs_geo_tensor)
+    batch_log_prob_exp = torch.mean(all_log_probs_exp_tensor)
 
-    return batch_delta_CLIP_score, batch_log_prob    
+    return batch_delta_CLIP_score, batch_log_prob_geo, batch_log_prob_exp
 
 def get_optimal_params(hparams):
     camera_params = {
@@ -365,23 +388,28 @@ def get_optimal_params(hparams):
 
 
 def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=None):
-    global lat_std, lat_mean
-    
+
+    global geo_mean, geo_std, exp_mean, exp_std
+
     if init_lat is None:
-        lat_rep = (torch.randn_like(lat_std) * lat_std * 0.85 + lat_mean).detach()
+        init_geo = torch.randn_like(geo_std) * geo_std * 0.85 + geo_mean
+        init_exp = torch.randn_like(exp_std) * exp_std * 0.85 + exp_mean
     else:
-        lat_rep = init_lat
-        
-    lat_rep = lat_rep.to(device).requires_grad_(True)
-    lat_mean = lat_mean.to(device)
+        init_geo = init_lat[0]
+        init_exp = init_lat[1]
+
+    lat_geo = init_geo.clone().detach().to(device).requires_grad_(True)
+    lat_exp = init_exp.clone().detach().to(device).requires_grad_(True)
+    lat_mean = [geo_mean, exp_mean]
 
     # --- Get Mean Image (required for CLIP and DINO validation) ---
     camera_params_opti, phong_params_opti, light_params_opti = get_optimal_params(hparams)
-    with torch.no_grad():
-        mean_image = render(sdf, lat_mean, camera_params_opti, phong_params_opti, light_params_opti)
+    if (CLIP_gt != None) or (DINO_gt != None):
+        with torch.no_grad():
+            mean_image = render(sdf, lat_mean, camera_params_opti, phong_params_opti, light_params_opti)
 
     if hparams['optimizer'] == 'Adam':
-        optimizer = Adam(params=[lat_rep],
+        optimizer = Adam(params=[lat_geo],#params=[lat_geo, lat_exp],
                      lr=hparams['optimizer_lr'],
                      betas=(0.9, 0.999),
                      weight_decay=0,
@@ -403,7 +431,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
     # Normal Mode
     now = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
-    writer = SummaryWriter(log_dir=f'../runs/a/train-time:{now}')
+    writer = SummaryWriter(log_dir=f'../runs/mono/train-time:{now}')
 
     best_score = torch.tensor([-torch.inf]).cpu()
     best_clip_score = torch.tensor([-torch.inf]).cpu()
@@ -422,26 +450,31 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     #prof.start()
     for iteration in tqdm(range(hparams['n_iterations'])):
     #prof.step()
-        lat_rep_old = lat_rep.detach().cpu()
-        batch_delta_CLIP_score, batch_log_prob_score = batch_forward(lat_rep, prompt, hparams)
+        lat_rep = [lat_geo, exp_mean]
+        #lat_rep_old = lat_rep.detach().cpu()
+        batch_delta_CLIP_score, batch_log_prob_geo_score, batch_log_prob_exp_score = batch_forward(lat_rep, prompt, hparams)
         sys.stdout.flush()
-        batch_score = loss_fn(batch_delta_CLIP_score, batch_log_prob_score, hparams)
+        batch_score = loss_fn(batch_delta_CLIP_score, batch_log_prob_geo_score, batch_log_prob_exp_score, hparams)
 
         if batch_score > best_score:
             best_score = batch_score.detach().cpu()
-            best_latent = torch.clone(lat_rep).cpu()
+            best_latent_geo = torch.clone(lat_rep[0]).cpu()
+            best_latent_exp = torch.clone(lat_rep[1]).cpu()
             
         if batch_delta_CLIP_score > best_clip_score:
             best_clip_score = batch_delta_CLIP_score.detach().cpu()
-            best_clip_latent = torch.clone(lat_rep).cpu()
+            #best_clip_latent = torch.clone(lat_rep).cpu()
 
-        batch_score.backward()
+        optimizer.zero_grad() 
+        batch_score.backward(retain_graph=True)
         
         # Manually modify the gradient to set NaN values to zero
-        lat_rep.grad = lat_rep.grad.nan_to_num(0.)
+        lat_geo.grad = lat_geo.grad.nan_to_num(0.)
+        #lat_exp.grad = lat_exp.grad.nan_to_num(0.)
 
         # --- Validation with CLIP / DINO Delta Score ---
-        if (CLIP_gt != None) or (DINO_gt != None):
+        #if (CLIP_gt != None) or (DINO_gt != None):
+        if (iteration == 0) or (iteration % 1 == 0):
             image = render(sdf, lat_rep, camera_params_opti, phong_params_opti, light_params_opti)
             writer.add_image(f'rendered image of {prompt}', image.detach().numpy(), iteration, dataformats='HWC')
         
@@ -456,26 +489,30 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             writer.add_scalar('DINO delta similarity', DINO_delta_sim, iteration)
         
         #clip_grad_norm_([lat_rep], hparams['grad_norm'])
-        gradient_lat_rep = lat_rep.grad
+        gradient_lat_geo = lat_geo.grad
+        #gradient_lat_exp = lat_exp.grad
 
         writer.add_scalar('Batch Score', batch_score, iteration)
         writer.add_scalar('Batch CLIP Score', batch_delta_CLIP_score, iteration)
-        writer.add_scalar('Batch Log Prob Score', batch_log_prob_score, iteration)
+        writer.add_scalar('Batch Log Prob Geometry Score', batch_log_prob_geo_score, iteration)
+        writer.add_scalar('Batch Log Prob Expression Score', batch_log_prob_exp_score, iteration)
         writer.add_scalar('learning rate', optimizer.param_groups[0]['lr'], iteration)
-        writer.add_scalar('Gradient norm of Score w.r.t. Latent', gradient_lat_rep.norm(), iteration)
+        writer.add_scalar('Gradient norm of Score w.r.t. Geometry Latent', gradient_lat_geo.norm(), iteration)
+        #writer.add_scalar('Gradient norm of Score w.r.t. Expression Latent', gradient_lat_exp.norm(), iteration)
+
 
         optimizer.step()
         lr_scheduler.step(batch_score)
 
         # Difference between lat_rep and previous lat_rep
-        lat_rep_diff = torch.abs(lat_rep.detach().cpu() - lat_rep_old) / lat_std.cpu()
-        mean_diff = torch.mean(lat_rep_diff.abs())
-        writer.add_scalar('Mean percentual diff wrt std dev', mean_diff, iteration)
+        #lat_rep_diff = torch.abs(lat_rep.detach().cpu() - lat_rep_old) / lat_std.cpu()
+        #mean_diff = torch.mean(lat_rep_diff.abs())
+        #writer.add_scalar('Mean percentual diff wrt std dev', mean_diff, iteration)
 
         optimizer.zero_grad()          
 
     #prof.stop()
-    lat_rep_end = lat_rep.detach()
+    #lat_rep_end = lat_rep.detach()
 
     writer.add_hparams(hparams, {
         'Best score': best_score,
@@ -483,7 +520,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         })
     writer.close()
 
-    return best_latent.detach(), best_clip_latent.detach(), lat_rep_end, best_score
+    return best_latent_geo.detach(), best_latent_exp.detach(), best_score
     
     
     
