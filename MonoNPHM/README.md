@@ -2,12 +2,15 @@
 
 This repository gives an implementation of an NPHM model with backward deformations, e.g. see [MonoNPHM](https://simongiebenhain.github.io/MonoNPHM/).
 
+The currently this repository focuses on single image 3D face reconstruction using inverse rendering.
 
 ## Installation
-
+> Note that some of the steps below can take a while
 ```
 conda env create -f environment.yml   
 conda activate NPHM-TUM
+
+pip install -e .
 
 # Install pytorch with CUDA support
 conda install pytorch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 pytorch-cuda=11.7 -c pytorch -c nvidia
@@ -21,40 +24,58 @@ conda install -c fvcore -c iopath -c conda-forge fvcore iopath
 conda install pytorch3d=0.7.4 -c pytorch3d
 ```
 
-Additionally, you will need to install the [famudy-data](https://github.com/tobias-kirschstein/famudy-data) package.
-Make sure to follow the corresponding README.md
+Next, you need to fill in some paths in `./src/nphm_tum/env_paths.py`.
+Before this use `cp src/nphm_tum/env_paths.template src/nphm_tum/env_paths.py` to create your local version and 
+set the paths according to your system.
+The provided comments are hopefully enough explanation.
 
-Before you can start to experiment with the provided demo scripts, you will need to set a few crucial paths in `src/nphm_tum/env_paths.py`:
-- The `ASSETS` variable should point to `/rhome/sgiebenhain/NPHM/assets/`, whereever it is mounted.
-- The `NERSEMBLE_DATASET_PATH` variable should point to `/cluster/doriath/tkirschstein/data/famudy/full/`
-- The `EXPERIMENT_DIR_REMOTE` variable should point to `/cluster/doriath/sgiebenhain/GTA/experiments/`
+Finally, fix some numpy versioning:
+`pip install numpy==1.23`
 
-Let me know if you run into any problems, or create a GitHub issue.
+## Getting Started with MonoNPHM
 
-## Overview of the Available Data
+The following gives intructions how to run the single-image 3D reconstruction pipeline.
 
-For a quick overview of the dataset structure and how NPHM is registered against the frames of the multi-view dataset, refer to [dataset.md](https://github.com/SimonGiebenhain/NPHM-TUM/blob/58ea9db3c47e95ea53cd2ac530ac13363f3cc316/dataset.md)
+### Installing the Preprocessing Pipeline
 
-## Getting Started
+Our preprocessing pipeline relies on the FLAME model. Therefore, you will need an account for the [FLAME website](https://flame.is.tue.mpg.de/).
+Let me know if you have any trouble concerning that.
 
-For some of the identites all timesteps of all sequences are processed. 
-These subjects provide a good entry point to start your experiments with.
-For example, take subject `037`.
+Also, you will need to download the pretrained [normal detector](https://github.com/boukhayma/face_normals/tree/5d6f21098b60dd5b43f82525383b2697df6e712b) from [here](https://drive.google.com/file/d/1Qb7CZbM13Zpksa30ywjXEEHHDcVWHju_/edit).
+Place the downloaded `model.pth` into `src/nphm_tum/preprocessing/pretrained_models/model.pth`.
 
-You can find a script that demonstrates the usage of the NPHM model 
-and reconstructs meshes from the fitted latent codes:
+Similarly, download the weights for the employed [facial landmark detector](https://github.com/jhb86253817/PIPNet) from [here](https://drive.google.com/drive/folders/17OwDgJUfuc5_ymQ3QruD8pUnh5zHreP2).
+Download the folder `snapshots/WFLW` and place it into `src/nphm_tum/preprocessing/PIPnet/snapshots`. 
+
+### Download Pretrained Model, Assets and Example Data
+
+You can find all necessary data here: `https://drive.google.com/drive/folders/1yZdQkkKwBJLeMIsCSAy7MeAkfJjZVD_H?usp=sharing`
+Please don't carelessly share the model checkpoint, since the latent codes from the dataset can reconstruct the faces up to a high level of detail. 
+
+### Running the Preprocessing
+
+First we need to preprocess a bunch of data, namely this includes:
+- landmark detection
+- semantic segmentation (including forground background segmentation)
+- FLAME fitting to get a rough initialization of the camera pose
+- Face Normal prediction
+
+To run all necessary preprocessing steps for id `00995` run:
+
 
 ```
-python scripts/intro_NPHM.py --p_id 37 --exp_name old2_imple_fabric_4gpu_all_traini2_wears --ckpt 6500 --seqs EXP-1-head
+cd scripts/preprocessing
+./run.sh 00995
+cd ../..
 ```
 
-Importantly, the previous script only demonstrated the usage of the NPHM model as a "decoder".
-Therefore, the resulting meshes are in canonical space.
+### Running the Tracking
 
-Running
+Once the preprocessing is done, you can start the inverse rendering using:
 
+```commandline
+python scripts/inference/track.py --exp_name PretrainedMonoNPHM --ckpt 2500 --seq_tag 00995 --run_tag first_try 
 ```
-python scripts/alignment_NPHM.py --p_id 37 --seq_name EXP-1-head --frame 0
-```
- demonstrates (the slightly convoluted way) of aligning the reconstructed mesh with world coordinates of the multi view camera system.
-This is visualized in a 3D viewer, as well as, by rendering the mesh and comparing it against the camera image.
+
+> Note: there is also an option to enable a normal loss. But the normal detector is not quite that reliable.
+

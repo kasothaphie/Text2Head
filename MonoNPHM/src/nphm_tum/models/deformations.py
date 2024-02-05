@@ -6,12 +6,7 @@ from typing import Optional
 from nphm_tum.models.canonical_space import NPHM
 
 
-
 class DeepSDF(nn.Module):
-    '''
-    Implementation of a multi-layer perceptron with a skip-connection, just as used in the DeepSDF paper.
-
-    '''
     def __init__(
             self,
             lat_dim,
@@ -27,6 +22,8 @@ class DeepSDF(nn.Module):
             color_branch=False,
             n_hyper : int = 0,
             sdf_corrective : bool = False,
+            freq_exp_base : float = 2.0,
+            legacy : bool = False,
 
     ):
         super().__init__()
@@ -58,12 +55,22 @@ class DeepSDF(nn.Module):
 
         for layer in range(0, self.num_layers - 1):
 
-            if layer + 1 in self.skip_in:
-                out_dim = dims[layer + 1] - d_in
+            if legacy:
+                if layer + 1 in self.skip_in:
+                    out_dim = dims[layer+1] - d_in
+                else:
+                    out_dim = dims[layer+1]
+
+                in_dim = dims[layer]
             else:
+                if layer in self.skip_in:
+                    in_dim = dims[layer] + d_in
+                else:
+                    in_dim = dims[layer]
+
                 out_dim = dims[layer + 1]
 
-            lin = nn.Linear(dims[layer], out_dim)
+            lin = nn.Linear(in_dim, out_dim)
 
             # if true preform preform geometric initialization
             if geometric_init:
@@ -108,12 +115,16 @@ class DeepSDF(nn.Module):
         if self.num_freq_bands is not None:
             pos_embeds = [xyz]
             for freq in self.freq_bands:
-                pos_embeds.append(torch.sin(xyz* freq))
+                pos_embeds.append(torch.sin(xyz * freq))
                 pos_embeds.append(torch.cos(xyz * freq))
 
             pos_embed = torch.cat(pos_embeds, dim=-1)
+            if lat_rep.shape[1] == 1 and pos_embed.shape[1] > 1:
+                lat_rep = lat_rep.repeat(1, pos_embed.shape[1], 1)
             inp = torch.cat([pos_embed, lat_rep], dim=-1)
         else:
+            if lat_rep.shape[1] == 1 and xyz.shape[1] > 1:
+                lat_rep = lat_rep.repeat(1, xyz.shape[1], 1)
             inp = torch.cat([xyz, lat_rep], dim=-1)
         x = inp
         last_feats = None
@@ -146,12 +157,8 @@ class DeepSDF(nn.Module):
         return x, last_feats
 
 
+
 class DeformationNetwork(nn.Module):
-    '''
-    Implments a deformation network using a DeepSDF-style MLP.
-    It models how points need to be moved as offsets, i.e.
-    output = input + predicted_offsets.
-    '''
     def __init__(
             self,
             mode,
@@ -169,25 +176,8 @@ class DeformationNetwork(nn.Module):
             sdf_corrective : bool = False,
             n_hyper : int = 0,
             local_arch : bool = False,
+            legacy : bool = False,
     ):
-        '''
-
-        :param mode: determines how the identity geometry codes incfluence the deoformation predictions.
-        :param lat_dim_expr: dimensionality of latent expression codes
-        :param lat_dim_id: number of dimensions derived from the identity code that influence the deformation --> only used with mode == 'compress'
-        :param lat_dim_glob_shape: dim. of global geometry code
-        :param lat_dim_loc_shape: dim. of local geometry code
-        :param n_loc: number of local MLPs
-        :param anchors: Average Anchor positions --> only relevant if local_arch==True
-        :param hidden_dim: width of MLP layers
-        :param nlayers: number of layers in MLP
-        :param out_dim: output dimensionality (usually 3)
-        :param input_dim: input dimensionality (usually 3)
-        :param neutral_only: if True, this function always predictions zero deformations/offsets
-        :param sdf_corrective: not supported; offset to SDF predictions as proposed in the ImFace paper
-        :param n_hyper: number of hyper dimensions
-        :param local_arch: if True, use an ensemble of local MLPs to represent the deformation field, instead of a DeepSDF-style MLP
-        '''
         super().__init__()
         self.mode = mode
         self.local_arch = local_arch
@@ -207,25 +197,8 @@ class DeformationNetwork(nn.Module):
         if self.sdf_corrective:
             self.out_dim += 1
 
-        if self.local_arch:
-            self.defDeepSDF = NPHM(lat_dim_glob=64,
-                                 lat_dim_loc=32,
-                                 n_symm=16,
-                                 n_anchors=39,
-                                 anchors=anchors,
-                                 hidden_dim=200, #300,#200,
-                                 n_layers=4, #5, #4,
-                                 num_neighbors=8,
-                                 d_pos=3,
-                                 is_monolith=False,
-                                 const_anchors=True,
-                                 d_out=self.out_dim,
-                                 )
-            self.lat_dim_expr = self.defDeepSDF.lat_dim // 2
-        else:
-            self.lat_dim_expr = lat_dim_expr
 
-
+        self.lat_dim_expr = lat_dim_expr
 
 
         if not self.neutral_only and not self.local_arch:
@@ -253,32 +226,24 @@ class DeformationNetwork(nn.Module):
             else:
                 raise ValueError('Unknown mode!')
 
-            if not self.local_arch:
-                print('creating DeepSDF with...')
-                print('lat dim', self.lat_dim)
-                print('hidden_dim', hidden_dim)
-                self.defDeepSDF = DeepSDF(lat_dim=self.lat_dim,
-                                          hidden_dim=hidden_dim,
-                                          nlayers=nlayers,
-                                          geometric_init=False,
-                                          out_dim=self.out_dim,
-                                          input_dim=input_dim).float()
+            print('creating DeepSDF with...')
+            print('lat dim', self.lat_dim)
+            print('hidden_dim', hidden_dim)
+            self.defDeepSDF = DeepSDF(lat_dim=self.lat_dim,
+                                      hidden_dim=hidden_dim,
+                                      nlayers=nlayers,
+                                      geometric_init=False,
+                                      out_dim=self.out_dim,
+                                      input_dim=input_dim,
+                                      legacy=legacy).float()
 
         self.anchors = anchors
 
 
     def forward(self, in_dict):
-        '''
-        Predicts backward deformations as offsets.
-
-        :param in_dict: contains:
-                    queries in posed space
-                    expression latent code
-                    gometry latent code
-        :return: return dict has:
-                    predicted offsets
-                    predicted hyper-dimensions, if they are used
-        '''
+        #xyz: B x N x 3
+        #lat: B x N x lat_dim
+        #anchors: B x N x n_kps x 3
 
         if self.neutral_only:
             return {'offsets': torch.zeros_like(in_dict['queries'])}
@@ -294,9 +259,9 @@ class DeformationNetwork(nn.Module):
 
         B, N, _ = xyz.shape
 
-        # not supported properly --> didn't perform well when I tried it in the NPHM paper
         if self.local_arch:
             # concatenate expr and id codes
+            #cond = torch.cat([lat_rep_id, lat_rep_ex], dim=-1)
             cond = lat_rep_ex
             # fake input s.t. AnchoredEnsembleField can handle it
             in_dict_fake = {'queries_can': xyz, 'cond': {'geo': cond}}
@@ -308,16 +273,13 @@ class DeformationNetwork(nn.Module):
             if lat_rep_ex.shape[1] == 1:
                 lat_rep_ex = lat_rep_ex.repeat(1, N, 1)
 
-            # only use the global part of the geometry latent code
             if self.mode == 'glob_only':
                 cond = torch.cat([lat_rep_id[:, :, :self.lat_dim_glob_shape], lat_rep_ex], dim=-1)
-            # don't use the geometry latent code at all
+
             elif self.mode == 'expr_only':
                 cond = lat_rep_ex
-            # not implemented
             elif self.mode == 'interpolate':
-                raise ValueError('Conditioning mode "interpolate" is not supported!')
-            # compress latent geometry code and predicted anchors into a lower-dimensional vector to prevent overfitting
+                assert 1 == 2
             elif self.mode == 'compress':
                 anchors = in_dict['anchors']
                 if not anchors.shape[1] == N:
@@ -325,8 +287,9 @@ class DeformationNetwork(nn.Module):
                         anchors = anchors.unsqueeze(1).repeat(1, N, 1, 1)
                     else:
                         anchors = anchors[:, 0, :, :].unsqueeze(1).repeat(1, N, 1, 1)
+                elif N == anchors.shape[-2] and len(anchors.shape) != 4:
+                    anchors = anchors.unsqueeze(1).repeat(1, N, 1, 1)
                 concat = torch.cat([lat_rep_id, anchors.reshape(B, N, -1)], dim=-1)
-                # compress using a single liner layer
                 compressed = self.compressor(concat[:, 0, :]).unsqueeze(1).repeat(1, N, 1)
                 #if self.training:
                 #    compressed += torch.randn(compressed.shape, device=compressed.device) / 200
@@ -335,11 +298,10 @@ class DeformationNetwork(nn.Module):
 
 
             elif self.mode == 'GNN':
-                raise ValueError('Conditioning mode "GNN" is not supported!')
+                assert 1 == 2
             else:
                 raise ValueError('Unknown mode')
 
-            # execute NN
             pred = self.defDeepSDF(xyz, cond)[0]
 
         output = {'offsets': pred[..., :3]}
@@ -393,7 +355,7 @@ def get_ex_model(cfg_ex : dict,
         out_dim=3,
         input_dim=3,
         neutral_only=False,
-        n_hyper=cfg_ex['decoder']['id']['n_hyper'],
+        n_hyper=cfg_ex['decoder']['n_hyper'],
         sdf_corrective=False,
         local_arch=False,
     )

@@ -2,3 +2,8 @@ build/
 __pycache__/
 *egg-info/
 /src/nphm_tum/env_paths.py
+/src/nphm_tum/preprocessing/MODNet/
+/src/nphm_tum/preprocessing/PIPNet/
+/src/nphm_tum/preprocessing/MICA/
+/src/nphm_tum/preprocessing/metrical-tracker/
+/src/nphm_tum/preprocessing/face_normals/

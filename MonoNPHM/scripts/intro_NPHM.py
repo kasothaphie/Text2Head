@@ -24,6 +24,19 @@ import trimesh
 
 os.umask(0o002)
 
+# delte; args for old model
+'''
+--p_id
+37
+--exp_name
+old2_imple_fabric_4gpu_all_traini2_wears
+--ckpt
+6500
+--seqs
+EXP-1-head
+'''
+
+
 
 def timeit(t0, tag):
     t = time()
@@ -32,8 +45,15 @@ def timeit(t0, tag):
 
 
 def sampling(n3dmm, lat_codes, res=256):
+    '''
+    The sampling ability of the NPHM model is quite bad.
+    :param n3dmm:
+    :param lat_codes:
+    :param res:
+    :return:
+    '''
 
-    out_dir_rnd_samples = f'~/nphm_random_samples/'
+    out_dir_rnd_samples = '/home/giebenhain/nphm_random_samples/'
     os.makedirs(out_dir_rnd_samples, exist_ok=True)
 
 
@@ -198,7 +218,7 @@ def do_mc(neural_3dmm,
     if not os.path.exists(src_dir):
         raise ValueError('Could not find NPHM tracking for participant {} and sequence {}'.format(p_id, seq_name))
 
-    tgt_dir = f'~/test_nphm_tum_repo/{p_id}_{seq_name}'
+    tgt_dir = f'~/test_nphm_tum_repo2/{p_id}_{seq_name}'
     os.makedirs(tgt_dir, exist_ok=True)
 
 
@@ -347,7 +367,7 @@ def main(p_id: int,
 
 
 
-    sampling(neural_3dmm, latent_codes)
+    #sampling(neural_3dmm, latent_codes)
 
     run_reconstruction(neural_3dmm,
                        p_id,

@@ -97,7 +97,7 @@ def get_logits(decoder,
         return logits
 
 
-def get_vertex_color(decoder, encoding, vertices, nbatch_points=100000, return_anchors=False, uniform_scaling=False, device=None):
+def get_vertex_color(decoder, encoding, vertices, nbatch_points=100000, return_anchors=False, uniform_scaling=True, device=None):
     sample_points = vertices.clone()
     if device is None:
         device = encoding['geo'].device

@@ -17,7 +17,7 @@ from nphm_tum.render_utils.pyvista_renderer import render
 def check_alignment(p_id : int,
                     seq_name : str,
                     frame : int):
-    mesh_dir = f'~/test_nphm_tum_repo/{p_id}_{seq_name}'
+    mesh_dir = f'~/test_nphm_tum_repo2/{p_id}_{seq_name}'
     flame_fitting_dir = env_paths.NERSEMBLE_DATASET_PATH + '/{:03d}/sequences/{}/annotations/tracking/'.format(p_id, seq_name)
 
     # load trimesh mesh, slightly more effort since it is in the CTM format

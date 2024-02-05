@@ -1,0 +1,20 @@
+EXPERIMENT_DIR = '/mnt/hdd/GTA-experiments/' # save training checkpoint here
+EXPERIMENT_DIR_REMOTE = '/mnt/rohan/cluster/doriath/sgiebenhain/GTA/experiments/' # load models from here
+
+TRACKING_RESULTS = '/mnt/hdd/mono-nphm_tracking/' #save tracking / fitting results here
+
+DATA_TRACKING = '/mnt/rohan/cluster/doriath/sgiebenhain/ffhq_mononphm_input/' # data for tracking is stored here
+CODE_BASE = '/home/giebenhain/debugNPHM/NPHM-TUM/' # let this point to the root of this repository
+
+# MICA and the metric-tracker will work on these directories
+MICA_INPUT_PATH = '/mnt/rohan/cluster/doriath/sgiebenhain/mica_input/'
+MICA_TRACKER_OUTPUT_PATH = '/mnt/rohan/rhome/sgiebenhain/metrical-tracker/output/'
+
+ASSETS = '/mnt/rohan/rhome/sgiebenhain/NPHM/assets/' # this should point to the assets directory of NPHM
+ANCHOR_INDICES_PATH = ASSETS + 'lm_inds_{}.npy'
+ANCHOR_MEAN_PATH = ASSETS + 'anchors_{}.npy'
+
+NERSEMBLE_DATASET_PATH = '/mnt/rohan/cluster/doriath/tkirschstein/data/famudy/full/'
+
+nphm_tracking_name_priorities = ['NPHM_distinctive_new'] #['NPHM_temp_wNeck_wLMs', 'NPHM_temp_wNeck', 'NPHM_distinctive', 'NPHM', ]
+neutrals_closed = None

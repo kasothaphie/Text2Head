@@ -97,7 +97,7 @@ class nn3dmm(nn.Module):
 
             # mechanism propsed in the ImFace paper, not sure if this option is still supported properly
             if self.ex_model.sdf_corrective:
-                pred['sdf'] += out_ex['sdf_corrective'] # TODO how to enforce eikonal constraint exactly??
+                pred['sdf'] += out_ex['sdf_corrective']
                 pred['sdf_corrective'] = out_ex['sdf_corrective']
 
             # return predicted hyper dimenions such that regularization can be applied later
@@ -258,6 +258,7 @@ def construct_n3dmm(cfg : dict,
                     modalities : List[Literal['geo', 'app', 'exp']],
                     n_latents : list[int],
                     device : torch._C.device = 0,
+                    include_color_branch : bool = False
                     ):
     '''
     Construct a neural parametric head model from a given config dictionary.
@@ -270,8 +271,14 @@ def construct_n3dmm(cfg : dict,
     :return: nn3dmm instance, LatentCodes instance
     '''
 
-
-    id_model, anchors = get_id_model(cfg['decoder']['id'], device)
+    # hack needed for legacy exoperiments
+    if 'n_hyper' not in cfg['decoder']:
+        cfg['decoder']['n_hyper'] = 2
+        cfg['decoder']['lambda_hyper'] = 0.01
+    id_model, anchors = get_id_model(cfg['decoder'],
+                                     spatial_input_dim=3+cfg['decoder']['n_hyper'],
+                                     rank=device,
+                                     include_color_branch=include_color_branch)
 
     ex_model = get_ex_model(cfg, anchors)
     n3dmm = nn3dmm(id_model=id_model,
@@ -279,10 +286,17 @@ def construct_n3dmm(cfg : dict,
                    expr_direction='backward',
                    ).to(device)
 
+    #latent_codes = LatentCodes(n_latents=n_latents,
+    #                           n_channels=[id_model.lat_dim, ex_model.lat_dim_expr, id_model.lat_dim,],
+    #                           modalities=modalities,
+    #                           types=['vector']*len(modalities),
+    #                           ).to(device)
     latent_codes = LatentCodes(n_latents=n_latents,
-                               n_channels=[id_model.lat_dim, ex_model.lat_dim_expr],
+                               n_channels=[id_model.lat_dim_glob + id_model.lat_dim_loc_geo * (id_model.n_anchors + 1),
+                                           ex_model.lat_dim_expr,
+                                           id_model.lat_dim_glob + id_model.lat_dim_loc_app * (id_model.n_anchors + 1), ],
                                modalities=modalities,
-                               types=['vector']*len(modalities),
+                               types=['vector'] * len(modalities),
                                ).to(device)
     return n3dmm, latent_codes
 
@@ -297,6 +311,7 @@ def load_checkpoint(ckpt_path : str,
     print('Loaded checkpoint from: {}'.format(ckpt_path))
     checkpoint = torch.load(ckpt_path, map_location=device)
 
-    n3dmm.load_state_dict(checkpoint['decoder'], strict=True)
+    n3dmm.id_model.load_state_dict(checkpoint['id_decoder'], strict=True)
+    n3dmm.ex_model.load_state_dict(checkpoint['ex_decoder'], strict=True)
 
     latent_codes.load_state_dict(checkpoint['latent_codes'])

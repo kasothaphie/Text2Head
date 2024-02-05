@@ -38,6 +38,7 @@ dependencies:
       #- torch_scatter
       #- torch_sparse
       #- torch_cluster
+      - Cython
       - dreifus
       - tyro
       - pymcubes
@@ -45,3 +46,31 @@ dependencies:
       - pyvista
       - pymeshlab
       - chardet
+      - point_cloud_utils
+      - mediapy
+      - pyrender
+      - ffmpeg
+      - numpy==1.23
+      - git+https://github.com/FacePerceiver/facer.git@main
+      - timm
+      - insightface # MICA
+      - onnxruntime # MICA
+      - loguru # MICA
+      - face_alignment # MICA
+      - tensorboard # metrical-tracker
+      - mediapipe # metrical-tracker
+      - distinctipy
+      - chumpy
+      - wandb
+      - mediapy
+      - pyrender
+      - point_cloud_utils
+      - distinctipy
+      - timm
+      - cython
+      - insightface==0.7
+      - loguru
+      - onnxruntime
+      - face_alignment
+      - tensorboard
+      - mediapipe
