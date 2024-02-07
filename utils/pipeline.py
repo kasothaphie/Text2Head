@@ -120,10 +120,10 @@ if mode == "nphm":
     lat_mean = torch.from_numpy(np.load(env_paths.ASSETS + 'nphm_lat_mean.npy'))
     lat_std = torch.from_numpy(np.load(env_paths.ASSETS + 'nphm_lat_std.npy'))
 elif mode == "mono_nphm":
-    geo_mean = latent_codes.codebook['geo'].embedding.weight.mean(dim=0)
-    geo_std = latent_codes.codebook['geo'].embedding.weight.std(dim=0)
-    exp_mean = latent_codes.codebook['exp'].embedding.weight.mean(dim=0)
-    exp_std = latent_codes.codebook['exp'].embedding.weight.std(dim=0)
+    geo_mean = latent_codes.codebook['geo'].embedding.weight.mean(dim=0).detach()
+    geo_std = latent_codes.codebook['geo'].embedding.weight.std(dim=0).detach()
+    exp_mean = latent_codes.codebook['exp'].embedding.weight.mean(dim=0).detach()
+    exp_std = latent_codes.codebook['exp'].embedding.weight.std(dim=0).detach()
 else:
     raise ValueError(f"unknown mode: {mode}")
 
@@ -409,7 +409,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             mean_image = render(sdf, lat_mean, camera_params_opti, phong_params_opti, light_params_opti)
 
     if hparams['optimizer'] == 'Adam':
-        optimizer = Adam(params=[lat_geo, lat_exp],#params=[lat_geo, lat_exp],
+        optimizer = Adam(params=[lat_geo, lat_exp],
                      lr=hparams['optimizer_lr'],
                      betas=(0.9, 0.999),
                      weight_decay=0,
@@ -466,7 +466,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             #best_clip_latent = torch.clone(lat_rep).cpu()
 
         optimizer.zero_grad() 
-        batch_score.backward(retain_graph=True)
+        batch_score.backward()
         
         # Manually modify the gradient to set NaN values to zero
         lat_geo.grad = lat_geo.grad.nan_to_num(0.)
