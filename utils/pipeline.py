@@ -96,13 +96,13 @@ elif mode == "mono_nphm":
     ckpt_path = osp.join(weight_dir_shape, 'checkpoints/checkpoint_epoch_6500.tar')
     load_checkpoint(ckpt_path, neural_3dmm, latent_codes)
         
-    def sdf(sdf_inputs, lat_rep):
+    def sdf(sdf_inputs, lat_geo, lat_exp):
         dict_in = {
             "queries":sdf_inputs
         }
         cond = {
-            "geo": torch.reshape(lat_rep[0], (1, 1, -1)),
-            "exp": torch.reshape(lat_rep[1], (1, 1, -1))
+            "geo": torch.reshape(lat_geo, (1, 1, -1)),
+            "exp": torch.reshape(lat_exp, (1, 1, -1))
         }
         return neural_3dmm(dict_in, cond)["sdf"]
             
@@ -120,10 +120,10 @@ if mode == "nphm":
     lat_mean = torch.from_numpy(np.load(env_paths.ASSETS + 'nphm_lat_mean.npy'))
     lat_std = torch.from_numpy(np.load(env_paths.ASSETS + 'nphm_lat_std.npy'))
 elif mode == "mono_nphm":
-    geo_mean = latent_codes.codebook['geo'].embedding.weight.mean(dim=0)
-    geo_std = latent_codes.codebook['geo'].embedding.weight.std(dim=0)
-    exp_mean = latent_codes.codebook['exp'].embedding.weight.mean(dim=0)
-    exp_std = latent_codes.codebook['exp'].embedding.weight.std(dim=0)
+    geo_mean = latent_codes.codebook['geo'].embedding.weight.mean(dim=0).detach()
+    geo_std = latent_codes.codebook['geo'].embedding.weight.std(dim=0).detach()
+    exp_mean = latent_codes.codebook['exp'].embedding.weight.mean(dim=0).detach()
+    exp_std = latent_codes.codebook['exp'].embedding.weight.std(dim=0).detach()
 else:
     raise ValueError(f"unknown mode: {mode}")
 
@@ -409,7 +409,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             mean_image = render(sdf, lat_mean, camera_params_opti, phong_params_opti, light_params_opti)
 
     if hparams['optimizer'] == 'Adam':
-        optimizer = Adam(params=[lat_geo],#params=[lat_geo, lat_exp],
+        optimizer = Adam(params=[lat_geo, lat_exp],
                      lr=hparams['optimizer_lr'],
                      betas=(0.9, 0.999),
                      weight_decay=0,
@@ -450,7 +450,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     #prof.start()
     for iteration in tqdm(range(hparams['n_iterations'])):
     #prof.step()
-        lat_rep = [lat_geo, exp_mean]
+        lat_rep = [lat_geo, lat_exp]
         #lat_rep_old = lat_rep.detach().cpu()
         batch_delta_CLIP_score, batch_log_prob_geo_score, batch_log_prob_exp_score = batch_forward(lat_rep, prompt, hparams)
         sys.stdout.flush()
@@ -466,11 +466,11 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             #best_clip_latent = torch.clone(lat_rep).cpu()
 
         optimizer.zero_grad() 
-        batch_score.backward(retain_graph=True)
+        batch_score.backward()
         
         # Manually modify the gradient to set NaN values to zero
         lat_geo.grad = lat_geo.grad.nan_to_num(0.)
-        #lat_exp.grad = lat_exp.grad.nan_to_num(0.)
+        lat_exp.grad = lat_exp.grad.nan_to_num(0.)
 
         # --- Validation with CLIP / DINO Delta Score ---
         #if (CLIP_gt != None) or (DINO_gt != None):
@@ -490,7 +490,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         
         #clip_grad_norm_([lat_rep], hparams['grad_norm'])
         gradient_lat_geo = lat_geo.grad
-        #gradient_lat_exp = lat_exp.grad
+        gradient_lat_exp = lat_exp.grad
 
         writer.add_scalar('Batch Score', batch_score, iteration)
         writer.add_scalar('Batch CLIP Score', batch_delta_CLIP_score, iteration)
@@ -498,7 +498,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         writer.add_scalar('Batch Log Prob Expression Score', batch_log_prob_exp_score, iteration)
         writer.add_scalar('learning rate', optimizer.param_groups[0]['lr'], iteration)
         writer.add_scalar('Gradient norm of Score w.r.t. Geometry Latent', gradient_lat_geo.norm(), iteration)
-        #writer.add_scalar('Gradient norm of Score w.r.t. Expression Latent', gradient_lat_exp.norm(), iteration)
+        writer.add_scalar('Gradient norm of Score w.r.t. Expression Latent', gradient_lat_exp.norm(), iteration)
 
 
         optimizer.step()

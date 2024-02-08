@@ -155,7 +155,7 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
     
         def get_sdf(nphm_input, lat_rep_in):
             #distance = model(nphm_input.to(device), lat_rep_in, None)[0].to("cpu")
-            distance = checkpoint(model, *[nphm_input.to(device), lat_rep_in]).to("cpu")
+            distance = checkpoint(model, *[nphm_input.to(device), *lat_rep_in]).to("cpu")
             return distance.squeeze()
             
         nphm_input = torch.reshape(positions, (1, -1, 3))
