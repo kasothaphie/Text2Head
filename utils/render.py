@@ -8,6 +8,9 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 def phong_model(sdf, points, camera_position, phong_params, light_params):
 
+    manual_light_color = torch.tensor([0.3, 0.7, 1.]).float()
+
+    colors = estimate_colors(sdf, points)
     normals = estimate_normals(sdf, points)
     view_dirs = points - camera_position
     light_dir_1 = light_params["light_dir_1"].repeat(points.shape[0], 1)
@@ -20,32 +23,37 @@ def phong_model(sdf, points, camera_position, phong_params, light_params):
     view_dir_norm = (view_dirs.T / torch.norm(view_dirs, dim=-1)).T
 
     # Ambient
-    ambient = phong_params["ambient_coeff"] * light_params["amb_light_color"]
+    #ambient = phong_params["ambient_coeff"] * light_params["amb_light_color"]
+    ambient = 6*phong_params["ambient_coeff"] * manual_light_color
     ambient_refl = ambient.repeat(points.shape[0], 1)
 
     # Area light
     diffuse_1 = phong_params["diffuse_coeff"] * torch.clamp(torch.sum(-light_dir_norm_1 * normals, dim=-1), min=0.0) * \
-                light_params["light_intensity_1"]  # [N]
-    diffuse_refl_1 = torch.matmul(diffuse_1.unsqueeze(1), light_params["light_color_1"].unsqueeze(0))  # [N, 3]
+                light_params["light_intensity_1"]*0.5  # [N]
+    #diffuse_refl_1 = torch.matmul(diffuse_1.unsqueeze(1), light_params["light_color_1"].unsqueeze(0))  # [N, 3]
+    diffuse_refl_1 = torch.matmul(diffuse_1.unsqueeze(1), manual_light_color.unsqueeze(0))  # [N, 3]
     reflect_dir_1 = light_dir_norm_1 + (
                 2 * normals.T * torch.clamp(torch.sum(-light_dir_norm_1 * normals, dim=-1), min=0.0)).T
     specular_1 = phong_params["specular_coeff"] * torch.pow(
         torch.clamp(torch.sum(reflect_dir_1 * -view_dir_norm, dim=-1), min=0.0), phong_params["shininess"]) * \
-                 light_params["light_intensity_1"]  # [N]
-    specular_refl_1 = torch.matmul(specular_1.unsqueeze(1), light_params["light_color_1"].unsqueeze(0))  # [N, 3]
+                 light_params["light_intensity_1"]*0.5   # [N]
+    #specular_refl_1 = torch.matmul(specular_1.unsqueeze(1), light_params["light_color_1"].unsqueeze(0))  # [N, 3]
+    specular_refl_1 = torch.matmul(specular_1.unsqueeze(1), manual_light_color.unsqueeze(0))  # [N, 3]
 
     # Point light
     diffuse_p = phong_params["diffuse_coeff"] * torch.clamp(torch.sum(-light_dir_norm_p * normals, dim=-1), min=0.0) * \
-                light_params["light_intensity_p"]  # [N]
-    diffuse_refl_p = torch.matmul(diffuse_p.unsqueeze(1), light_params["light_color_p"].unsqueeze(0))  # [N, 3]
+                light_params["light_intensity_p"]*0.5   # [N]
+    #diffuse_refl_p = torch.matmul(diffuse_p.unsqueeze(1), light_params["light_color_p"].unsqueeze(0))  # [N, 3]
+    diffuse_refl_p = torch.matmul(diffuse_p.unsqueeze(1), manual_light_color.unsqueeze(0))  # [N, 3]
     reflect_dir_p = light_dir_norm_p + (
                 2 * normals.T * torch.clamp(torch.sum(-light_dir_norm_p * normals, dim=-1), min=0.0)).T
     specular_p = phong_params["specular_coeff"] * torch.pow(
         torch.clamp(torch.sum(reflect_dir_p * -view_dir_norm, dim=-1), min=0.0), phong_params["shininess"]) * \
-                 light_params["light_intensity_p"]  # [N]
-    specular_refl_p = torch.matmul(specular_p.unsqueeze(1), light_params["light_color_p"].unsqueeze(0))  # [N, 3]
+                 light_params["light_intensity_p"]*0.5   # [N]
+    #specular_refl_p = torch.matmul(specular_p.unsqueeze(1), light_params["light_color_p"].unsqueeze(0))  # [N, 3]
+    specular_refl_p = torch.matmul(specular_p.unsqueeze(1), manual_light_color.unsqueeze(0))  # [N, 3]
 
-    return ambient_refl + diffuse_refl_1 + specular_refl_1 + diffuse_refl_p + specular_refl_p
+    return ambient_refl + diffuse_refl_1 + specular_refl_1 + diffuse_refl_p + specular_refl_p, colors
 
 
 def estimate_normals(sdf, points, epsilon=1e-3):
@@ -54,7 +62,8 @@ def estimate_normals(sdf, points, epsilon=1e-3):
                                points + torch.tensor([0, epsilon, 0]),
                                points + torch.tensor([0, 0, epsilon])])
 
-    sdf_values = sdf(sdf_inputs).reshape(4, -1)
+    sdf_values, _ = sdf(sdf_inputs)
+    sdf_values = sdf_values.reshape(4, -1)
 
     # Calculate the gradient using finite differences
     gradient = sdf_values[1:] - sdf_values[0]
@@ -63,6 +72,10 @@ def estimate_normals(sdf, points, epsilon=1e-3):
     normal = gradient / torch.norm(gradient, p=2, dim=0)
 
     return normal.T
+
+def estimate_colors(sdf, points):
+    _, colors = sdf(points)
+    return colors
 
 
 def sphere_trace(sdf, camera_position, norm_directions, max_length):
@@ -113,12 +126,12 @@ def acc_sphere_trace(sdf, init_position, norm_directions, max_length, scale=np.s
 
         d_curr[mask] = r_curr[mask] + scale * r_curr[mask] * torch.nan_to_num(
             (d_curr[mask] - r_last[mask] + r_curr[mask]) / (d_curr[mask] + r_last[mask] - r_curr[mask]))
-        r_next[mask] = sdf(positions[mask] + ((t[mask] + d_curr[mask]) * norm_directions[mask].T).T)
+        r_next[mask], _ = sdf(positions[mask] + ((t[mask] + d_curr[mask]) * norm_directions[mask].T).T)
 
         normal_tracing_mask = torch.abs(d_curr[mask]) > torch.abs(r_curr[mask]) + torch.abs(r_next[mask])
         if torch.any(normal_tracing_mask):
             d_curr[mask][normal_tracing_mask] = r_curr[mask][normal_tracing_mask]
-            r_next[mask][normal_tracing_mask] = sdf(positions[mask][normal_tracing_mask] + (
+            r_next[mask][normal_tracing_mask], _ = sdf(positions[mask][normal_tracing_mask] + (
                         (t[mask][normal_tracing_mask] + d_curr[mask][normal_tracing_mask]) * norm_directions[mask][
                     normal_tracing_mask].T).T)
 
@@ -155,23 +168,28 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
     
         def get_sdf(nphm_input, lat_rep_in):
             #distance = model(nphm_input.to(device), lat_rep_in, None)[0].to("cpu")
-            distance = checkpoint(model, *[nphm_input.to(device), *lat_rep_in]).to("cpu")
-            return distance.squeeze()
+            distance, color = checkpoint(model, *[nphm_input.to(device), *lat_rep_in])
+            distance = distance.to("cpu")
+            color = color.to("cpu")
+            return distance.squeeze(), color.squeeze()
             
         nphm_input = torch.reshape(positions, (1, -1, 3))
         
         if nphm_input.shape[1] > chunk_size:
             chunked = torch.chunk(nphm_input, chunks=nphm_input.shape[1] // chunk_size, dim=1)
-            distances = [get_sdf(chunk, lat_rep) for chunk in chunked]
-            return torch.cat(distances, dim=0)
+            distances, colors = zip(*[get_sdf(chunk, lat_rep) for chunk in chunked])
+            return torch.cat(distances, dim=0), torch.cat(colors, dim=0)
         else:
             #distance = model(nphm_input.to(device), lat_rep_in.to(device).requires_grad_(True), None)[0].to("cpu")
-            distance = get_sdf(nphm_input, lat_rep)
-            return distance
+            distance, color = get_sdf(nphm_input, lat_rep)
+            return distance, color
 
     pu = camera_params["resolution_x"]
     pv = camera_params["resolution_y"]
-    image = phong_params["background_color"].repeat(pu * pv, 1)
+    manual_background_color = torch.tensor([1, 1, 1]).float()
+    manual_object_color = torch.tensor([1, 1, 1]).float()
+    #image = phong_params["background_color"].repeat(pu * pv, 1)
+    image = manual_background_color.repeat(pu * pv, 1)
 
     angle_radians = torch.deg2rad_(torch.tensor(camera_params["camera_angle"]))
     camera = torch.tensor([torch.sin(angle_radians), 0, torch.cos(angle_radians)])
@@ -229,17 +247,20 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
             gradient_mask = gradient_mask[torch.randperm(len(gradient_mask))].bool()
             no_gradient_mask = ~gradient_mask
 
-            no_gradient_reflections = phong_model(sdf, phong_points[no_gradient_mask, :], camera_position, phong_params, light_params)
-        gradient_reflections = phong_model(sdf, phong_points[gradient_mask, :], camera_position, phong_params, light_params)
-        reflections = torch.zeros_like(phong_points).float()
-        reflections[gradient_mask] = gradient_reflections
-        reflections[no_gradient_mask] = no_gradient_reflections
+            no_gradient_reflections, no_gradient_colors = phong_model(sdf, phong_points[no_gradient_mask, :], camera_position, phong_params, light_params)
+        gradient_reflections, gradient_colors = phong_model(sdf, phong_points[gradient_mask, :], camera_position, phong_params, light_params)
+        reflections = torch.zeros_like(phong_points).float() 
+        colors = torch.zeros_like(phong_points).float()
+        reflections[gradient_mask], colors[gradient_mask] = gradient_reflections
+        reflections[no_gradient_mask], colors[no_gradient_mask] = no_gradient_reflections
     else:
-        reflections = phong_model(sdf, phong_points, camera_position, phong_params, light_params)
+        reflections, colors = phong_model(sdf, phong_points, camera_position, phong_params, light_params)
         
 
     # Assign a color for objects
-    image[hit_mask] = torch.mul(reflections, phong_params["object_color"].repeat(reflections.shape[0], 1))
+    #image[hit_mask] = torch.mul(reflections, phong_params["object_color"].repeat(reflections.shape[0], 1))
+    image[hit_mask] = torch.mul(reflections, colors)
+    #image[hit_mask] = torch.mul(reflections, manual_object_color.repeat(reflections.shape[0], 1))
     image = torch.clamp(image, min=0.0, max=1.0)
     nan_mask = torch.isnan(image)
     image = torch.where(nan_mask, torch.tensor(0.0), image)

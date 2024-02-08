@@ -744,4 +744,3 @@ def get_id_model(cfg,
 
     return id_model , anchors
 
-

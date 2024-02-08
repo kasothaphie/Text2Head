@@ -84,28 +84,35 @@ elif mode == "mono_nphm":
         expression_index = json.load(f)
 
 
-    # construct the NPHM models and latent codebook
+    device = torch.device("cuda")
+    modalities = ['geo', 'exp', 'app']
+    n_lats = [len(subject_index), len(expression_index), len(subject_index)]
+
     neural_3dmm, latent_codes = construct_n3dmm(
-        cfg = CFG,
-        modalities=['geo', 'exp'],
-        n_latents=[len(subject_index), len(expression_index)],
-        device=device
-        )
+        cfg=CFG,
+        modalities=modalities,
+        n_latents=n_lats,
+        device=device,
+        include_color_branch=True
+    )
 
     # load checkpoint from trained NPHM model, including the latent codes
-    ckpt_path = osp.join(weight_dir_shape, 'checkpoints/checkpoint_epoch_6500.tar')
+    ckpt_path = osp.join(weight_dir_shape, 'checkpoints/checkpoint_epoch_2500.tar')
     load_checkpoint(ckpt_path, neural_3dmm, latent_codes)
         
     def sdf(sdf_inputs, lat_geo, lat_exp):
         dict_in = {
             "queries":sdf_inputs
         }
+
         cond = {
             "geo": torch.reshape(lat_geo, (1, 1, -1)),
-            "exp": torch.reshape(lat_exp, (1, 1, -1))
+            "exp": torch.reshape(lat_exp, (1, 1, -1)),
+            "app": torch.zeros_like(lat_geo)
         }
-        return neural_3dmm(dict_in, cond)["sdf"]
-            
+        dict_out = neural_3dmm(dict_in, cond)
+        return dict_out["sdf"], dict_out["color"]
+
 else:
     raise ValueError(f"unknown mode: {mode}")
 
@@ -127,6 +134,7 @@ elif mode == "mono_nphm":
 else:
     raise ValueError(f"unknown mode: {mode}")
 
+mode = "id only"
 
 def loss_fn(clip_score, prob_geo_score, prob_exp_score, hparams):
     return (clip_score + hparams["lambda"] * (prob_geo_score + prob_exp_score)) / (1 + hparams["lambda"])
@@ -171,22 +179,17 @@ def penalty_score(lat_rep, a=0.065, b=2.5):
     return penalty
 
 def log_prop_score(lat_rep):
-    if mode == 'nphm':
-        cov = lat_std * torch.eye(lat_mean.shape[0])
-        delta = lat_rep.cpu() - lat_mean.cpu() # [1344]
-        prob_geo = -delta.T @ torch.inverse(cov.cpu()) @ delta
-        prob_exp = None
-    elif mode == 'mono_nphm':
-        # --- Probability of latent geometry code ---
-        geo_rep = torch.reshape(lat_rep[0], (-1,)) # [1344] 
-        cov_geo = geo_std.cpu() * torch.eye(geo_mean.shape[0])
-        delta_geo = geo_rep.cpu() - geo_mean.cpu() 
-        prob_geo = -delta_geo.T @ torch.inverse(cov_geo.cpu()) @ delta_geo
-        # --- Probability of latent expression code ---
-        exp_rep = torch.reshape(lat_rep[1], (-1,)) # [200] 
-        cov_exp = exp_std.cpu() * torch.eye(exp_mean.shape[0])
-        delta_exp = exp_rep.cpu() - exp_mean.cpu() 
-        prob_exp = -delta_exp.T @ torch.inverse(cov_exp.cpu()) @ delta_exp
+    
+    # --- Probability of latent geometry code ---
+    geo_rep = torch.reshape(lat_rep[0], (-1,)) # [1344] 
+    cov_geo = geo_std.cpu() * torch.eye(geo_mean.shape[0])
+    delta_geo = geo_rep.cpu() - geo_mean.cpu() 
+    prob_geo = -delta_geo.T @ torch.inverse(cov_geo.cpu()) @ delta_geo
+    # --- Probability of latent expression code ---
+    exp_rep = torch.reshape(lat_rep[1], (-1,)) # [200] 
+    cov_exp = exp_std.cpu() * torch.eye(exp_mean.shape[0])
+    delta_exp = exp_rep.cpu() - exp_mean.cpu() 
+    prob_exp = -delta_exp.T @ torch.inverse(cov_exp.cpu()) @ delta_exp
     
     return prob_geo, prob_exp
 
@@ -237,10 +240,13 @@ def get_augmented_params(lat_rep, hparams):
     shift_geo = shift_geo.to(device)
     lat_geo_aug = lat_rep[0] + shift_geo
 
-    random_multipliers_exp = torch.randn(exp_std.shape) * hparams["alpha"]
-    shift_exp = exp_std.cpu() * random_multipliers_exp
-    shift_exp = shift_exp.to(device)
-    lat_exp_aug = lat_rep[1] + shift_exp
+    if mode == 'id only':
+        lat_exp_aug = lat_rep[1]
+    else:
+        random_multipliers_exp = torch.randn(exp_std.shape) * hparams["alpha"]
+        shift_exp = exp_std.cpu() * random_multipliers_exp
+        shift_exp = shift_exp.to(device)
+        lat_exp_aug = lat_rep[1] + shift_exp
 
     lat_rep_aug = [lat_geo_aug, lat_exp_aug]
 
@@ -409,11 +415,18 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             mean_image = render(sdf, lat_mean, camera_params_opti, phong_params_opti, light_params_opti)
 
     if hparams['optimizer'] == 'Adam':
-        optimizer = Adam(params=[lat_geo, lat_exp],
+        if mode == 'id only':
+            optimizer = Adam(params=[lat_geo],
                      lr=hparams['optimizer_lr'],
                      betas=(0.9, 0.999),
                      weight_decay=0,
                      maximize=True)
+        else:
+            optimizer = Adam(params=[lat_geo, lat_exp],
+                        lr=hparams['optimizer_lr'],
+                        betas=(0.9, 0.999),
+                        weight_decay=0,
+                        maximize=True)
     elif hparams['optimizer'] == 'EMA':
         optimizer = EMA(params=[lat_rep],
                      lr=hparams['optimizer_lr'],
@@ -450,7 +463,10 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     #prof.start()
     for iteration in tqdm(range(hparams['n_iterations'])):
     #prof.step()
-        lat_rep = [lat_geo, lat_exp]
+        if mode == 'id only':
+            lat_rep = [lat_geo, exp_mean]
+        else:
+            lat_rep = [lat_geo, lat_exp]
         #lat_rep_old = lat_rep.detach().cpu()
         batch_delta_CLIP_score, batch_log_prob_geo_score, batch_log_prob_exp_score = batch_forward(lat_rep, prompt, hparams)
         sys.stdout.flush()
@@ -470,7 +486,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         
         # Manually modify the gradient to set NaN values to zero
         lat_geo.grad = lat_geo.grad.nan_to_num(0.)
-        lat_exp.grad = lat_exp.grad.nan_to_num(0.)
+        #lat_exp.grad = lat_exp.grad.nan_to_num(0.)
 
         # --- Validation with CLIP / DINO Delta Score ---
         #if (CLIP_gt != None) or (DINO_gt != None):
@@ -490,7 +506,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         
         #clip_grad_norm_([lat_rep], hparams['grad_norm'])
         gradient_lat_geo = lat_geo.grad
-        gradient_lat_exp = lat_exp.grad
+        #gradient_lat_exp = lat_exp.grad
 
         writer.add_scalar('Batch Score', batch_score, iteration)
         writer.add_scalar('Batch CLIP Score', batch_delta_CLIP_score, iteration)
@@ -498,7 +514,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         writer.add_scalar('Batch Log Prob Expression Score', batch_log_prob_exp_score, iteration)
         writer.add_scalar('learning rate', optimizer.param_groups[0]['lr'], iteration)
         writer.add_scalar('Gradient norm of Score w.r.t. Geometry Latent', gradient_lat_geo.norm(), iteration)
-        writer.add_scalar('Gradient norm of Score w.r.t. Expression Latent', gradient_lat_exp.norm(), iteration)
+        #writer.add_scalar('Gradient norm of Score w.r.t. Expression Latent', gradient_lat_exp.norm(), iteration)
 
 
         optimizer.step()
