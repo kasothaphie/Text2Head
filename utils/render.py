@@ -8,8 +8,6 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 def phong_model(sdf, points, camera_position, phong_params, light_params):
 
-    manual_light_color = torch.tensor([1., 1., 1.]).float()
-
     colors = estimate_colors(sdf, points)
     normals = estimate_normals(sdf, points)
     view_dirs = points - camera_position
@@ -23,35 +21,30 @@ def phong_model(sdf, points, camera_position, phong_params, light_params):
     view_dir_norm = (view_dirs.T / torch.norm(view_dirs, dim=-1)).T
 
     # Ambient
-    #ambient = phong_params["ambient_coeff"] * light_params["amb_light_color"]
-    ambient = phong_params["ambient_coeff"] * manual_light_color
+    ambient = phong_params["ambient_coeff"] * light_params["amb_light_color"]
     ambient_refl = ambient.repeat(points.shape[0], 1)
 
     # Area light
     diffuse_1 = phong_params["diffuse_coeff"] * torch.clamp(torch.sum(-light_dir_norm_1 * normals, dim=-1), min=0.0) * \
-                light_params["light_intensity_1"] * 0.5 # [N]
-    #diffuse_refl_1 = torch.matmul(diffuse_1.unsqueeze(1), light_params["light_color_1"].unsqueeze(0))  # [N, 3]
-    diffuse_refl_1 = torch.matmul(diffuse_1.unsqueeze(1), manual_light_color.unsqueeze(0))  # [N, 3]
+                light_params["light_intensity_1"]# [N]
+    diffuse_refl_1 = torch.matmul(diffuse_1.unsqueeze(1), light_params["light_color_1"].unsqueeze(0))  # [N, 3]
     reflect_dir_1 = light_dir_norm_1 + (
                 2 * normals.T * torch.clamp(torch.sum(-light_dir_norm_1 * normals, dim=-1), min=0.0)).T
     specular_1 = phong_params["specular_coeff"] * torch.pow(
         torch.clamp(torch.sum(reflect_dir_1 * -view_dir_norm, dim=-1), min=0.0), phong_params["shininess"]) * \
-                 light_params["light_intensity_1"] * 0.5  # [N]
-    #specular_refl_1 = torch.matmul(specular_1.unsqueeze(1), light_params["light_color_1"].unsqueeze(0))  # [N, 3]
-    specular_refl_1 = torch.matmul(specular_1.unsqueeze(1), manual_light_color.unsqueeze(0))  # [N, 3]
+                 light_params["light_intensity_1"] # [N]
+    specular_refl_1 = torch.matmul(specular_1.unsqueeze(1), light_params["light_color_1"].unsqueeze(0))  # [N, 3]
 
     # Point light
     diffuse_p = phong_params["diffuse_coeff"] * torch.clamp(torch.sum(-light_dir_norm_p * normals, dim=-1), min=0.0) * \
-                light_params["light_intensity_p"] * 0.5  # [N]
-    #diffuse_refl_p = torch.matmul(diffuse_p.unsqueeze(1), light_params["light_color_p"].unsqueeze(0))  # [N, 3]
-    diffuse_refl_p = torch.matmul(diffuse_p.unsqueeze(1), manual_light_color.unsqueeze(0))  # [N, 3]
+                light_params["light_intensity_p"] # [N]
+    diffuse_refl_p = torch.matmul(diffuse_p.unsqueeze(1), light_params["light_color_p"].unsqueeze(0))  # [N, 3]
     reflect_dir_p = light_dir_norm_p + (
                 2 * normals.T * torch.clamp(torch.sum(-light_dir_norm_p * normals, dim=-1), min=0.0)).T
     specular_p = phong_params["specular_coeff"] * torch.pow(
         torch.clamp(torch.sum(reflect_dir_p * -view_dir_norm, dim=-1), min=0.0), phong_params["shininess"]) * \
-                 light_params["light_intensity_p"] * 0.5  # [N]
-    #specular_refl_p = torch.matmul(specular_p.unsqueeze(1), light_params["light_color_p"].unsqueeze(0))  # [N, 3]
-    specular_refl_p = torch.matmul(specular_p.unsqueeze(1), manual_light_color.unsqueeze(0))  # [N, 3]
+                 light_params["light_intensity_p"]  # [N]
+    specular_refl_p = torch.matmul(specular_p.unsqueeze(1), light_params["light_color_p"].unsqueeze(0))  # [N, 3]
 
     return ambient_refl + diffuse_refl_1 + specular_refl_1 + diffuse_refl_p + specular_refl_p, colors
 
@@ -188,10 +181,7 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
 
     pu = camera_params["resolution_x"]
     pv = camera_params["resolution_y"]
-    manual_background_color = torch.tensor([1, 1, 1]).float()
-    manual_object_color = torch.tensor([1, 1, 1]).float()
-    #image = phong_params["background_color"].repeat(pu * pv, 1)
-    image = manual_background_color.repeat(pu * pv, 1)
+    image = phong_params["background_color"].repeat(pu * pv, 1)
 
     angle_radians = torch.deg2rad_(torch.tensor(camera_params["camera_angle"]))
     camera = torch.tensor([torch.sin(angle_radians), 0, torch.cos(angle_radians)])
@@ -253,8 +243,10 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
         gradient_reflections, gradient_colors = phong_model(sdf, phong_points[gradient_mask, :], camera_position, phong_params, light_params)
         reflections = torch.zeros_like(phong_points).float() 
         colors = torch.zeros_like(phong_points).float()
-        reflections[gradient_mask], colors[gradient_mask] = gradient_reflections
-        reflections[no_gradient_mask], colors[no_gradient_mask] = no_gradient_reflections
+        reflections[gradient_mask] = gradient_reflections
+        reflections[no_gradient_mask] = no_gradient_reflections
+        colors[gradient_mask] = gradient_colors
+        colors[no_gradient_mask] = no_gradient_colors
     else:
         reflections, colors = phong_model(sdf, phong_points, camera_position, phong_params, light_params)
         
@@ -262,7 +254,6 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
     # Assign a color for objects
     #image[hit_mask] = torch.mul(reflections, phong_params["object_color"].repeat(reflections.shape[0], 1))
     image[hit_mask] = torch.mul(reflections, colors)
-    #image[hit_mask] = torch.mul(reflections, manual_object_color.repeat(reflections.shape[0], 1))
     image = torch.clamp(image, min=0.0, max=1.0)
     nan_mask = torch.isnan(image)
     image = torch.where(nan_mask, torch.tensor(0.0), image)
