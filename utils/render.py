@@ -8,7 +8,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 def phong_model(sdf, points, camera_position, phong_params, light_params):
 
-    manual_light_color = torch.tensor([0.3, 0.7, 1.]).float()
+    manual_light_color = torch.tensor([1., 1., 1.]).float()
 
     colors = estimate_colors(sdf, points)
     normals = estimate_normals(sdf, points)
@@ -24,32 +24,32 @@ def phong_model(sdf, points, camera_position, phong_params, light_params):
 
     # Ambient
     #ambient = phong_params["ambient_coeff"] * light_params["amb_light_color"]
-    ambient = 6*phong_params["ambient_coeff"] * manual_light_color
+    ambient = phong_params["ambient_coeff"] * manual_light_color
     ambient_refl = ambient.repeat(points.shape[0], 1)
 
     # Area light
     diffuse_1 = phong_params["diffuse_coeff"] * torch.clamp(torch.sum(-light_dir_norm_1 * normals, dim=-1), min=0.0) * \
-                light_params["light_intensity_1"]*0.5  # [N]
+                light_params["light_intensity_1"] * 0.5 # [N]
     #diffuse_refl_1 = torch.matmul(diffuse_1.unsqueeze(1), light_params["light_color_1"].unsqueeze(0))  # [N, 3]
     diffuse_refl_1 = torch.matmul(diffuse_1.unsqueeze(1), manual_light_color.unsqueeze(0))  # [N, 3]
     reflect_dir_1 = light_dir_norm_1 + (
                 2 * normals.T * torch.clamp(torch.sum(-light_dir_norm_1 * normals, dim=-1), min=0.0)).T
     specular_1 = phong_params["specular_coeff"] * torch.pow(
         torch.clamp(torch.sum(reflect_dir_1 * -view_dir_norm, dim=-1), min=0.0), phong_params["shininess"]) * \
-                 light_params["light_intensity_1"]*0.5   # [N]
+                 light_params["light_intensity_1"] * 0.5  # [N]
     #specular_refl_1 = torch.matmul(specular_1.unsqueeze(1), light_params["light_color_1"].unsqueeze(0))  # [N, 3]
     specular_refl_1 = torch.matmul(specular_1.unsqueeze(1), manual_light_color.unsqueeze(0))  # [N, 3]
 
     # Point light
     diffuse_p = phong_params["diffuse_coeff"] * torch.clamp(torch.sum(-light_dir_norm_p * normals, dim=-1), min=0.0) * \
-                light_params["light_intensity_p"]*0.5   # [N]
+                light_params["light_intensity_p"] * 0.5  # [N]
     #diffuse_refl_p = torch.matmul(diffuse_p.unsqueeze(1), light_params["light_color_p"].unsqueeze(0))  # [N, 3]
     diffuse_refl_p = torch.matmul(diffuse_p.unsqueeze(1), manual_light_color.unsqueeze(0))  # [N, 3]
     reflect_dir_p = light_dir_norm_p + (
                 2 * normals.T * torch.clamp(torch.sum(-light_dir_norm_p * normals, dim=-1), min=0.0)).T
     specular_p = phong_params["specular_coeff"] * torch.pow(
         torch.clamp(torch.sum(reflect_dir_p * -view_dir_norm, dim=-1), min=0.0), phong_params["shininess"]) * \
-                 light_params["light_intensity_p"]*0.5   # [N]
+                 light_params["light_intensity_p"] * 0.5  # [N]
     #specular_refl_p = torch.matmul(specular_p.unsqueeze(1), light_params["light_color_p"].unsqueeze(0))  # [N, 3]
     specular_refl_p = torch.matmul(specular_p.unsqueeze(1), manual_light_color.unsqueeze(0))  # [N, 3]
 
@@ -75,6 +75,8 @@ def estimate_normals(sdf, points, epsilon=1e-3):
 
 def estimate_colors(sdf, points):
     _, colors = sdf(points)
+    colors = colors + 1
+    colors /= 2
     return colors
 
 

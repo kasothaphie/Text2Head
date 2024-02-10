@@ -100,7 +100,7 @@ elif mode == "mono_nphm":
     ckpt_path = osp.join(weight_dir_shape, 'checkpoints/checkpoint_epoch_2500.tar')
     load_checkpoint(ckpt_path, neural_3dmm, latent_codes)
         
-    def sdf(sdf_inputs, lat_geo, lat_exp):
+    def sdf(sdf_inputs, lat_geo, lat_exp, lat_app):
         dict_in = {
             "queries":sdf_inputs
         }
@@ -108,7 +108,7 @@ elif mode == "mono_nphm":
         cond = {
             "geo": torch.reshape(lat_geo, (1, 1, -1)),
             "exp": torch.reshape(lat_exp, (1, 1, -1)),
-            "app": torch.zeros_like(lat_geo)
+            "app": torch.reshape(lat_app, (1, 1, -1))
         }
         dict_out = neural_3dmm(dict_in, cond)
         return dict_out["sdf"], dict_out["color"]
@@ -131,6 +131,8 @@ elif mode == "mono_nphm":
     geo_std = latent_codes.codebook['geo'].embedding.weight.std(dim=0).detach()
     exp_mean = latent_codes.codebook['exp'].embedding.weight.mean(dim=0).detach()
     exp_std = latent_codes.codebook['exp'].embedding.weight.std(dim=0).detach()
+    app_mean = latent_codes.codebook['app'].embedding.weight.mean(dim=0).detach()
+    app_std = latent_codes.codebook['app'].embedding.weight.std(dim=0).detach()
 else:
     raise ValueError(f"unknown mode: {mode}")
 
