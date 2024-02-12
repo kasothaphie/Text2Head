@@ -8,6 +8,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 def phong_model(sdf, points, camera_position, phong_params, light_params):
 
+    # TODO combine estimate_colors and estimate_normals to save one call to sdf
     colors = estimate_colors(sdf, points)
     normals = estimate_normals(sdf, points)
     view_dirs = points - camera_position
@@ -254,6 +255,7 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
     # Assign a color for objects
     #image[hit_mask] = torch.mul(reflections, phong_params["object_color"].repeat(reflections.shape[0], 1))
     image[hit_mask] = torch.mul(reflections, colors)
+    #image[hit_mask] = torch.mul(reflections, manual_object_color.repeat(reflections.shape[0], 1))
     image = torch.clamp(image, min=0.0, max=1.0)
     nan_mask = torch.isnan(image)
     image = torch.where(nan_mask, torch.tensor(0.0), image)
