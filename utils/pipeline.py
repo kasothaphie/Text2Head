@@ -534,9 +534,6 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             writer.add_scalar('DINO delta similarity', DINO_delta_sim, iteration)
         
         #clip_grad_norm_([lat_rep], hparams['grad_norm'])
-        gradient_lat_geo = lat_geo.grad
-        gradient_lat_exp = lat_exp.grad
-        gradient_lat_app = lat_app.grad
 
         writer.add_scalar('Batch Score', batch_score, iteration)
         writer.add_scalar('Batch CLIP Score', batch_delta_CLIP_score, iteration)
@@ -544,9 +541,15 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         writer.add_scalar('Batch Log Prob Expression Score', batch_log_prob_exp_score, iteration)
         writer.add_scalar('Batch Log Prob Appearance Score', batch_log_prob_app_score, iteration)
         writer.add_scalar('learning rate', optimizer.param_groups[0]['lr'], iteration)
-        writer.add_scalar('Gradient norm of Score w.r.t. Geometry Latent', gradient_lat_geo.norm(), iteration)
-        writer.add_scalar('Gradient norm of Score w.r.t. Expression Latent', gradient_lat_exp.norm(), iteration)
-        writer.add_scalar('Gradient norm of Score w.r.t. Appearance Latent', gradient_lat_app.norm(), iteration)
+        if 'geo' in opt_vars:
+            gradient_lat_geo = lat_geo.grad
+            writer.add_scalar('Gradient norm of Score w.r.t. Geometry Latent', gradient_lat_geo.norm(), iteration)
+        if 'exp' in opt_vars:
+            gradient_lat_exp = lat_exp.grad
+            writer.add_scalar('Gradient norm of Score w.r.t. Expression Latent', gradient_lat_exp.norm(), iteration)
+        if 'app' in opt_vars:
+            gradient_lat_app = lat_app.grad
+            writer.add_scalar('Gradient norm of Score w.r.t. Appearance Latent', gradient_lat_app.norm(), iteration)
 
 
         optimizer.step()
