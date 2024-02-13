@@ -372,7 +372,7 @@ def batch_forward(lat_rep_orig, prompt, hparams):
     all_delta_CLIP_scores_tensor = torch.stack(all_delta_CLIP_scores)
     all_log_probs_geo_tensor = torch.stack(all_log_probs_geo)
     all_log_probs_exp_tensor = torch.stack(all_log_probs_exp)
-    all_log_probs_app_tensor = torch.stack(all_log_probs_exp)
+    all_log_probs_app_tensor = torch.stack(all_log_probs_app)
     batch_delta_CLIP_score = torch.mean(all_delta_CLIP_scores_tensor)
     batch_log_prob_geo = torch.mean(all_log_probs_geo_tensor)
     batch_log_prob_exp = torch.mean(all_log_probs_exp_tensor)
