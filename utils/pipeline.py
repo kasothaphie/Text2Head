@@ -28,7 +28,7 @@ from utils.EMA import EMA
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 mode = "mono_nphm" # nphm, else mono_nphm
-opt_vars = ['geo'] # add 'exp' and/or 'app'
+opt_vars = ['geo', 'exp', 'app'] # add 'exp' and/or 'app'
 
 CLIP_model, CLIP_preprocess = clip.load("ViT-B/32", device="cpu")
 #SigLIPmodel = open_clip.create_model("ViT-B-16-SigLIP", pretrained='webli', device="cpu")
@@ -268,7 +268,7 @@ def get_augmented_params(lat_rep, hparams):
     lat_rep_aug = [lat_geo_aug, lat_exp_aug, lat_app_aug]
 
     # --- Camera Parameters Augmentation ---
-    camera_distance_factor = torch.rand(1).item() * 0.05 + 0.2 #random value [0.2, 0.25]
+    camera_distance_factor = torch.rand(1).item() * 0.05 + 0.32  #random value [0.2, 0.25]
     focal_length = torch.rand(1).item() * 0.4 + 2.5 #random value [2.5, 3.3]
     angle = float(torch.randint(-50, 90, (1,)).item()) # random int [-45, 90]
     camera_params_aug = {
@@ -282,49 +282,49 @@ def get_augmented_params(lat_rep, hparams):
     }
 
     # --- Phong Parameters Augmentation ---
-    amb_coeff = torch.rand(1).item() * 0.06 + 0.47 #random value [0.47, 0.53]
-    diffuse_coeff = torch.rand(1).item() * 0.1 + 0.7 #random value [0.7, 0.8]
-    specular_coeff = torch.rand(1).item() * 0.08 + 0.59 #random value [0.59, 0.67]
+    amb_coeff = torch.rand(1).item() * 0.06 + 0.29 #random value [0.47, 0.53]
+    diffuse_coeff = torch.rand(1).item() * 0.1 + 0.8 #random value [0.7, 0.8]
+    specular_coeff = torch.rand(1).item() * 0.08 + 0.3 #random value [0.59, 0.67]
     object_color_0 = torch.rand(1).item() * 0.1 + 0.53 #random value [0.53, 0.63]
     object_color_1 = torch.rand(1).item() * 0.13 + 0.19 #random value [0.19, 0.32]
     object_color_2 = torch.rand(1).item() * 0.06 + 0.63 #random value [0.63, 0.69]
-    background_color_0 = torch.rand(1).item() * 0.05 + 0.34 #random value [0.34, 0.39]
-    background_color_1 = torch.rand(1).item() * 0.08 + 0.7 #random value [0.7, 0.78]
-    background_color_2 = torch.rand(1).item() * 0.04 + 0.27 #random value [0.27, 0.31]
+    background_color_0 = torch.rand(1).item() * 0.05 + 0.72 #random value [0.34, 0.39]
+    background_color_1 = torch.rand(1).item() * 0.08 + 0.81 #random value [0.7, 0.78]
+    background_color_2 = torch.rand(1).item() * 0.04 + 0.29 #random value [0.27, 0.31]
     phong_params_aug = {
         "ambient_coeff": amb_coeff,
         "diffuse_coeff": diffuse_coeff,
         "specular_coeff": specular_coeff,
-        "shininess": 0.5,
+        "shininess": 25,
         # Colors
         "object_color": torch.tensor([object_color_0, object_color_1, object_color_2]),
         "background_color": torch.tensor([background_color_0, background_color_1, background_color_2])
     }
 
     # --- Light Parameters Augmentation ---
-    amb_color_0 = torch.rand(1).item() * 0.1 + 0.8 #random value [0.8, 0.9]
-    amb_color_1 = torch.rand(1).item() * 0.06 + 0.1 #random value [0.1, 0.16]
-    amb_color_2 = torch.rand(1).item() * 0.05 + 0.54 #random value [0.54, 0.59]
-    light_intensity_1 = torch.rand(1).item() * 0.3 + 1.3 #random value [1.3, 1.6]
-    light_intensity_p = torch.rand(1).item() * 0.26 + 0.58 #random value [0.58, 0.84]
+    amb_color_0 = torch.rand(1).item() * 0.1 + 0.6 #random value [0.8, 0.9]
+    amb_color_1 = torch.rand(1).item() * 0.1 + 0.61 #random value [0.1, 0.16]
+    amb_color_2 = torch.rand(1).item() * 0.1 + 0.65 #random value [0.54, 0.59]
+    light_intensity_1 = torch.rand(1).item() * 0.3 + 1.54 #random value [1.3, 1.6]
+    light_intensity_p = torch.rand(1).item() * 0.3 + 0.38 #random value [0.58, 0.84]
     if angle >= 0:
-        light_dir_0 = torch.rand(1).item() * 0.05 - 0.6 #random value [-0.6, -0.55]
-        light_pos_0 = 1.19
+        light_dir_0 = torch.rand(1).item() * 0.05 - 0.87 #random value [-0.6, -0.55]
+        light_pos_0 = 0.17
     else:
-        light_dir_0 = torch.rand(1).item() * 0.05 + 0.55 #random value [0.55, 0.6]
-        light_pos_0 = -1.19
-    light_dir_1 = torch.rand(1).item() * 0.05 - 0.43 #random value [-0.43, -0.38]
-    light_dir_2 = torch.rand(1).item() * 0.1 - 0.71 #random value [-0.71, -0.61]
+        light_dir_0 = torch.rand(1).item() * 0.05 + 0.82 #random value [0.55, 0.6]
+        light_pos_0 = -0.17
+    light_dir_1 = torch.rand(1).item() * 0.05 - 0.2 #random value [-0.43, -0.38]
+    light_dir_2 = torch.rand(1).item() * 0.1 - 0.85 #random value [-0.71, -0.61]
     light_params_aug = {
         "amb_light_color": torch.tensor([amb_color_0, amb_color_1, amb_color_2]),
         # light 1
         "light_intensity_1": light_intensity_1,
-        "light_color_1": torch.tensor([0.8, 0.97, 0.89]),
+        "light_color_1": torch.tensor([1., 0.91, 0.88]),
         "light_dir_1": torch.tensor([light_dir_0, light_dir_1, light_dir_2]),
         # light p
         "light_intensity_p": light_intensity_p,
-        "light_color_p": torch.tensor([0.8, 0.97, 0.89]),
-        "light_pos_p": torch.tensor([light_pos_0, -1.27, 2.24])
+        "light_color_p": torch.tensor([1., 0.91, 0.88]),
+        "light_pos_p": torch.tensor([light_pos_0, 2.77, -2.25])
     }
     
     return lat_rep_aug, camera_params_aug, phong_params_aug, light_params_aug
@@ -382,35 +382,36 @@ def batch_forward(lat_rep_orig, prompt, hparams):
 
 def get_optimal_params(hparams):
     camera_params = {
-        "camera_distance": 0.21 * 2.57,
+        "camera_distance": 0.34 * 2.7,
         "camera_angle": 45.,
-        "focal_length": 2.57,
+        "focal_length": 2.7,
         "max_ray_length": 3,
         # Image
         "resolution_y": hparams["resolution"],
         "resolution_x": hparams["resolution"]
     }
     phong_params = {
-        "ambient_coeff": 0.51,
-        "diffuse_coeff": 0.75,
-        "specular_coeff": 0.64,
-        "shininess": 0.5,
+        "ambient_coeff": 0.32,
+        "diffuse_coeff": 0.85,
+        "specular_coeff": 0.34,
+        "shininess": 25,
         # Colors
         "object_color": torch.tensor([0.53, 0.24, 0.64]),
-        "background_color": torch.tensor([0.36, 0.77, 0.29])
+        "background_color": torch.tensor([0.75, 0.85, 0.31])
     }
 
     light_params = {
-        "amb_light_color": torch.tensor([0.9, 0.16, 0.55]),
+        "amb_light_color": torch.tensor([0.65, 0.66, 0.69]),
         # light 1
-        "light_intensity_1": 1.42,
-        "light_color_1": torch.tensor([0.8, 0.97, 0.89]),
-        "light_dir_1": torch.tensor([-0.6, -0.4, -0.67]),
+        "light_intensity_1": 1.69,
+        "light_color_1": torch.tensor([1., 0.91, 0.88]),
+        "light_dir_1": torch.tensor([-0.85, -0.18, -0.8]),
         # light p
-        "light_intensity_p": 0.62,
-        "light_color_p": torch.tensor([0.8, 0.97, 0.89]),
-        "light_pos_p": torch.tensor([1.19, -1.27, 2.24])
+        "light_intensity_p": 0.52,
+        "light_color_p": torch.tensor([1., 0.91, 0.88]),
+        "light_pos_p": torch.tensor([0.17, 2.77, -2.25])
     }
+    
     return camera_params, phong_params, light_params
 
 
