@@ -158,7 +158,7 @@ def two_phase_tracing(sdf, camera_position, norm_directions, max_length, scale=n
     return hits, hit_mask
 
 
-def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=None):
+def render(model, lat_rep, camera_params, phong_params, light_params, color=True, mesh_path=None):
 
     def sdf(positions, chunk_size=10000):
     
@@ -253,9 +253,11 @@ def render(model, lat_rep, camera_params, phong_params, light_params, mesh_path=
         
 
     # Assign a color for objects
-    #image[hit_mask] = torch.mul(reflections, phong_params["object_color"].repeat(reflections.shape[0], 1))
-    image[hit_mask] = torch.mul(reflections, colors)
-    #image[hit_mask] = torch.mul(reflections, manual_object_color.repeat(reflections.shape[0], 1))
+    if color == True:
+        image[hit_mask] = torch.mul(reflections, colors)
+    else:
+        image[hit_mask] = torch.mul(reflections, phong_params["object_color"].repeat(reflections.shape[0], 1))
+
     image = torch.clamp(image, min=0.0, max=1.0)
     nan_mask = torch.isnan(image)
     image = torch.where(nan_mask, torch.tensor(0.0), image)

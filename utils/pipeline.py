@@ -140,8 +140,8 @@ else:
 def loss_fn(clip_score, prob_geo_score, prob_exp_score, prob_app_score, hparams):
     return (clip_score + hparams["lambda"] * (prob_geo_score + prob_exp_score + prob_app_score)) / (1 + hparams["lambda"])
 
-def get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params):
-    image = render(sdf, lat_rep, camera_params, phong_params, light_params)
+def get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params, color):
+    image = render(sdf, lat_rep, camera_params, phong_params, light_params, color)
     image_c_first = image.permute(2, 0, 1)
     image_preprocessed = clip_tensor_preprocessor(image_c_first).unsqueeze(0).cpu()
     CLIP_embedding_image = CLIP_model.encode_image(image_preprocessed) # [1, 512]
@@ -199,9 +199,13 @@ def log_prop_score(lat_rep):
     
     return prob_geo, prob_exp, prob_app
 
-def forward(lat_rep, prompt, camera_params, phong_params, light_params):
+def forward(lat_rep, prompt, camera_params, phong_params, light_params, color):
     # --- Render Image from current Lat Rep + Embedd ---
-    image_embedding, image = get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params)
+    image_embedding, image = get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params, color)
+    # for debugging
+    #plt.imshow(image.detach().numpy())
+    #plt.axis('off')  # Turn off axes
+    #plt.show()
     ##
     delta_images_normalized = image_embedding
     '''
@@ -238,7 +242,7 @@ def energy_level(lat_rep_1, lat_rep_2, prompt, hparams, steps=100):
     
     return energy, forwards
 
-def get_augmented_params(lat_rep, hparams):
+def get_augmented_params_color(lat_rep, hparams):
     # --- Latent Representation Augmentation ---
     # Generate random values from a normal distribution with standard deviation alpha
     if 'geo' in opt_vars:
@@ -268,7 +272,95 @@ def get_augmented_params(lat_rep, hparams):
     lat_rep_aug = [lat_geo_aug, lat_exp_aug, lat_app_aug]
 
     # --- Camera Parameters Augmentation ---
-    camera_distance_factor = torch.rand(1).item() * 0.05 + 0.32  #random value [0.2, 0.25]
+    camera_distance_factor = torch.rand(1).item() * 0.4 + 0.2 #random value [0.2, 0.6]
+    focal_length = torch.rand(1).item() * 1.3 + 2.7 #random value [2.7, 4.0]
+    angle = float(torch.randint(-50, 90, (1,)).item()) # random int [-45, 90]
+    camera_params_aug = {
+        "camera_distance": camera_distance_factor * focal_length,
+        "camera_angle": angle,
+        "focal_length": focal_length,
+        "max_ray_length": 3,
+        # Image
+        "resolution_y": hparams["resolution"],
+        "resolution_x": hparams["resolution"]
+    }
+
+    # --- Phong Parameters Augmentation ---
+    amb_coeff = torch.rand(1).item() * 0.28 + 0.1 #random value [0.1, 0.38]
+    diffuse_coeff = torch.rand(1).item() * 0.2 + 0.8 #random value [0.8, 1.]
+    specular_coeff = torch.rand(1).item() * 0.33 + 0.1 #random value [0.1, 0.43]
+    background_color_0 = torch.rand(1).item() * 0.14 + 0.68 #random value [0.68, 0.82]
+    background_color_1 = torch.rand(1).item() * 0.09 + 0.84 #random value [0.84, 0.93]
+    background_color_2 = torch.rand(1).item() * 0.32 + 0.13 #random value [0.13, 0.45]
+    phong_params_aug = {
+        "ambient_coeff": amb_coeff,
+        "diffuse_coeff": diffuse_coeff,
+        "specular_coeff": specular_coeff,
+        "shininess": 25,
+        # Colors
+        "object_color": None,
+        "background_color": torch.tensor([background_color_0, background_color_1, background_color_2])
+    }
+
+    # --- Light Parameters Augmentation ---
+    amb_color_0 = torch.rand(1).item() * 0.07 + 0.58 #random value [0.58, 0.65]
+    amb_color_1 = torch.rand(1).item() * 0.19 + 0.53 #random value [0.53, 0.72]
+    amb_color_2 = torch.rand(1).item() * 0.21 + 0.62 #random value [0.62, 0.83]
+    light_intensity_1 = torch.rand(1).item() * 0.7 + 1.1 #random value [1.1, 1.8]
+    light_intensity_p = torch.rand(1).item() * 0.3 + 0.2 #random value [0.2, 0.5]
+    if angle >= 0:
+        light_dir_0 = torch.rand(1).item() * 0.11 - 0.95 #random value [-0.84, -0.95]
+        light_pos_0 = 0.17
+    else:
+        light_dir_0 = torch.rand(1).item() * 0.11 + 0.84 #random value [0.84, 0.95]
+        light_pos_0 = -0.17
+    light_dir_1 = torch.rand(1).item() * 0.33 - 0.5 #random value [-0.17, -0.5]
+    light_dir_2 = torch.rand(1).item() * 0.2 - 0.84 #random value [-0.64, -0.84]
+    light_params_aug = {
+        "amb_light_color": torch.tensor([amb_color_0, amb_color_1, amb_color_2]),
+        # light 1
+        "light_intensity_1": light_intensity_1,
+        "light_color_1": torch.tensor([1., 0.95, 0.9]),
+        "light_dir_1": torch.tensor([light_dir_0, light_dir_1, light_dir_2]),
+        # light p
+        "light_intensity_p": light_intensity_p,
+        "light_color_p": torch.tensor([1., 0.95, 0.9]),
+        "light_pos_p": torch.tensor([light_pos_0, 2.77, -2.25])
+    }
+
+    return lat_rep_aug, camera_params_aug, phong_params_aug, light_params_aug
+
+def get_augmented_params_no_color(lat_rep, hparams):
+    # --- Latent Representation Augmentation ---
+    # Generate random values from a normal distribution with standard deviation alpha
+    if 'geo' in opt_vars:
+        random_multipliers_geo = torch.randn(geo_std.shape) * hparams["alpha"]
+        shift_geo = geo_std.cpu() * random_multipliers_geo
+        shift_geo = shift_geo.to(device)
+        lat_geo_aug = lat_rep[0] + shift_geo
+    else:
+        lat_geo_aug = lat_rep[0]
+    
+    if 'exp' in opt_vars:
+        random_multipliers_exp = torch.randn(exp_std.shape) * hparams["alpha"]
+        shift_exp = exp_std.cpu() * random_multipliers_exp
+        shift_exp = shift_exp.to(device)
+        lat_exp_aug = lat_rep[1] + shift_exp
+    else:
+        lat_exp_aug = lat_rep[1]
+        
+    if 'app' in opt_vars:
+        random_multipliers_app = torch.randn(app_std.shape) * hparams["alpha"]
+        shift_app = app_std.cpu() * random_multipliers_app
+        shift_app = shift_app.to(device)
+        lat_app_aug = lat_rep[2] + shift_app
+    else:
+        lat_app_aug = lat_rep[2]
+
+    lat_rep_aug = [lat_geo_aug, lat_exp_aug, lat_app_aug]
+
+    # --- Camera Parameters Augmentation ---
+    camera_distance_factor = torch.rand(1).item() * 0.05 + 0.2 #random value [0.2, 0.25]
     focal_length = torch.rand(1).item() * 0.4 + 2.5 #random value [2.5, 3.3]
     angle = float(torch.randint(-50, 90, (1,)).item()) # random int [-45, 90]
     camera_params_aug = {
@@ -282,49 +374,49 @@ def get_augmented_params(lat_rep, hparams):
     }
 
     # --- Phong Parameters Augmentation ---
-    amb_coeff = torch.rand(1).item() * 0.06 + 0.29 #random value [0.47, 0.53]
-    diffuse_coeff = torch.rand(1).item() * 0.1 + 0.8 #random value [0.7, 0.8]
-    specular_coeff = torch.rand(1).item() * 0.08 + 0.3 #random value [0.59, 0.67]
+    amb_coeff = torch.rand(1).item() * 0.06 + 0.47 #random value [0.47, 0.53]
+    diffuse_coeff = torch.rand(1).item() * 0.1 + 0.7 #random value [0.7, 0.8]
+    specular_coeff = torch.rand(1).item() * 0.08 + 0.59 #random value [0.59, 0.67]
     object_color_0 = torch.rand(1).item() * 0.1 + 0.53 #random value [0.53, 0.63]
     object_color_1 = torch.rand(1).item() * 0.13 + 0.19 #random value [0.19, 0.32]
     object_color_2 = torch.rand(1).item() * 0.06 + 0.63 #random value [0.63, 0.69]
-    background_color_0 = torch.rand(1).item() * 0.05 + 0.72 #random value [0.34, 0.39]
-    background_color_1 = torch.rand(1).item() * 0.08 + 0.81 #random value [0.7, 0.78]
-    background_color_2 = torch.rand(1).item() * 0.04 + 0.29 #random value [0.27, 0.31]
+    background_color_0 = torch.rand(1).item() * 0.05 + 0.34 #random value [0.34, 0.39]
+    background_color_1 = torch.rand(1).item() * 0.08 + 0.7 #random value [0.7, 0.78]
+    background_color_2 = torch.rand(1).item() * 0.04 + 0.27 #random value [0.27, 0.31]
     phong_params_aug = {
         "ambient_coeff": amb_coeff,
         "diffuse_coeff": diffuse_coeff,
         "specular_coeff": specular_coeff,
-        "shininess": 25,
+        "shininess": 0.5,
         # Colors
         "object_color": torch.tensor([object_color_0, object_color_1, object_color_2]),
         "background_color": torch.tensor([background_color_0, background_color_1, background_color_2])
     }
 
     # --- Light Parameters Augmentation ---
-    amb_color_0 = torch.rand(1).item() * 0.1 + 0.6 #random value [0.8, 0.9]
-    amb_color_1 = torch.rand(1).item() * 0.1 + 0.61 #random value [0.1, 0.16]
-    amb_color_2 = torch.rand(1).item() * 0.1 + 0.65 #random value [0.54, 0.59]
-    light_intensity_1 = torch.rand(1).item() * 0.3 + 1.54 #random value [1.3, 1.6]
-    light_intensity_p = torch.rand(1).item() * 0.3 + 0.38 #random value [0.58, 0.84]
+    amb_color_0 = torch.rand(1).item() * 0.1 + 0.8 #random value [0.8, 0.9]
+    amb_color_1 = torch.rand(1).item() * 0.06 + 0.1 #random value [0.1, 0.16]
+    amb_color_2 = torch.rand(1).item() * 0.05 + 0.54 #random value [0.54, 0.59]
+    light_intensity_1 = torch.rand(1).item() * 0.3 + 1.3 #random value [1.3, 1.6]
+    light_intensity_p = torch.rand(1).item() * 0.26 + 0.58 #random value [0.58, 0.84]
     if angle >= 0:
-        light_dir_0 = torch.rand(1).item() * 0.05 - 0.87 #random value [-0.6, -0.55]
-        light_pos_0 = 0.17
+        light_dir_0 = torch.rand(1).item() * 0.05 - 0.6 #random value [-0.6, -0.55]
+        light_pos_0 = 1.19
     else:
-        light_dir_0 = torch.rand(1).item() * 0.05 + 0.82 #random value [0.55, 0.6]
-        light_pos_0 = -0.17
-    light_dir_1 = torch.rand(1).item() * 0.05 - 0.2 #random value [-0.43, -0.38]
-    light_dir_2 = torch.rand(1).item() * 0.1 - 0.85 #random value [-0.71, -0.61]
+        light_dir_0 = torch.rand(1).item() * 0.05 + 0.55 #random value [0.55, 0.6]
+        light_pos_0 = -1.19
+    light_dir_1 = torch.rand(1).item() * 0.05 - 0.43 #random value [-0.43, -0.38]
+    light_dir_2 = torch.rand(1).item() * 0.1 - 0.71 #random value [-0.71, -0.61]
     light_params_aug = {
         "amb_light_color": torch.tensor([amb_color_0, amb_color_1, amb_color_2]),
         # light 1
         "light_intensity_1": light_intensity_1,
-        "light_color_1": torch.tensor([1., 0.91, 0.88]),
+        "light_color_1": torch.tensor([0.8, 0.97, 0.89]),
         "light_dir_1": torch.tensor([light_dir_0, light_dir_1, light_dir_2]),
         # light p
         "light_intensity_p": light_intensity_p,
-        "light_color_p": torch.tensor([1., 0.91, 0.88]),
-        "light_pos_p": torch.tensor([light_pos_0, 2.77, -2.25])
+        "light_color_p": torch.tensor([0.8, 0.97, 0.89]),
+        "light_pos_p": torch.tensor([light_pos_0, -1.27, 2.24])
     }
     
     return lat_rep_aug, camera_params_aug, phong_params_aug, light_params_aug
@@ -335,35 +427,21 @@ def batch_forward(lat_rep_orig, prompt, hparams):
     all_log_probs_exp = []
     all_log_probs_app = []
     
-    # --- Params for Determined Augmentation (not necessary for default = Random Augmentation) ---
-    angles = [45., -30., 90., 
-              -50., 35., -20., 
-              55., -40., 10.]
-    #shift = hparams['alpha'] * lat_std
-    #shift = shift.to(device)
-    #lat_reps = [lat_rep_orig, (lat_rep_orig + shift), (lat_rep_orig - shift),
-               #(lat_rep_orig + 0.5 * shift), (lat_rep_orig - 0.5 * shift), (lat_rep_orig + 0.3 *shift), (lat_rep_orig - 0.3 * shift)]
-    
     for i in range(hparams['batch_size']):
-        # --- Random Augmentation ---
-        lat_rep, camera_params, phong_params, light_params = get_augmented_params(lat_rep_orig, hparams)
-        
-        # --- Determined Augmentation ----
-        #lat_rep = lat_reps[i]
-        #lat_rep = lat_rep_orig
-        #lat_rep, _, _, _ = get_augmented_params(lat_rep_orig, hparams)
-        #camera_params, phong_params, light_params = get_optimal_params(hparams)
-        #_, camera_params, phong_params, light_params = get_augmented_params(lat_rep_orig, hparams)
-        #camera_params['camera_angle'] = angles[i]
-        #if angles[i] >= 0:
-            #light_params['light_dir_1'] = torch.tensor([-0.6, -0.4, -0.67])
-            #light_params['light_pos_p'] = torch.tensor([1.19, -1.27, 2.24])
-        #else:
-            #light_params['light_dir_1'] = torch.tensor([0.6, -0.4, -0.67])
-            #light_params['light_pos_p'] = torch.tensor([-1.19, -1.27, 2.24])
+
+        if torch.rand(1) <= hparams['color_prob']:
+            # --- Random Augmentation ---
+            lat_rep, camera_params, phong_params, light_params = get_augmented_params_color(lat_rep_orig, hparams)
+            # --- Forward Pass ---
+            delta_CLIP_score, log_prob_geo, log_prob_exp, log_prop_app, _ = forward(lat_rep, prompt, camera_params, phong_params, light_params, color=True)
+        else:
+            # --- Random Augmentation ---
+            lat_rep, camera_params, phong_params, light_params = get_augmented_params_no_color(lat_rep_orig, hparams)
+            # --- Forward Pass ---
+            delta_CLIP_score, log_prob_geo, log_prob_exp, log_prop_app, _ = forward(lat_rep, prompt, camera_params, phong_params, light_params, color=False)
+
         
         # --- Compute Scores ---
-        delta_CLIP_score, log_prob_geo, log_prob_exp, log_prop_app, _ = forward(lat_rep, prompt, camera_params, phong_params, light_params)
         all_delta_CLIP_scores.append(delta_CLIP_score)
         all_log_probs_geo.append(log_prob_geo)
         all_log_probs_exp.append(log_prob_exp)
@@ -380,36 +458,37 @@ def batch_forward(lat_rep_orig, prompt, hparams):
 
     return batch_delta_CLIP_score, batch_log_prob_geo, batch_log_prob_exp, batch_log_prob_app
 
+# Optimial Params for Rendering without color
 def get_optimal_params(hparams):
     camera_params = {
-        "camera_distance": 0.34 * 2.7,
+        "camera_distance": 0.21 * 2.57,
         "camera_angle": 45.,
-        "focal_length": 2.7,
+        "focal_length": 2.57,
         "max_ray_length": 3,
         # Image
         "resolution_y": hparams["resolution"],
         "resolution_x": hparams["resolution"]
     }
     phong_params = {
-        "ambient_coeff": 0.32,
-        "diffuse_coeff": 0.85,
-        "specular_coeff": 0.34,
-        "shininess": 25,
+        "ambient_coeff": 0.51,
+        "diffuse_coeff": 0.75,
+        "specular_coeff": 0.64,
+        "shininess": 0.5,
         # Colors
         "object_color": torch.tensor([0.53, 0.24, 0.64]),
-        "background_color": torch.tensor([0.75, 0.85, 0.31])
+        "background_color": torch.tensor([0.36, 0.77, 0.29])
     }
 
     light_params = {
-        "amb_light_color": torch.tensor([0.65, 0.66, 0.69]),
+        "amb_light_color": torch.tensor([0.9, 0.16, 0.55]),
         # light 1
-        "light_intensity_1": 1.69,
-        "light_color_1": torch.tensor([1., 0.91, 0.88]),
-        "light_dir_1": torch.tensor([-0.85, -0.18, -0.8]),
+        "light_intensity_1": 1.42,
+        "light_color_1": torch.tensor([0.8, 0.97, 0.89]),
+        "light_dir_1": torch.tensor([-0.6, -0.4, -0.67]),
         # light p
-        "light_intensity_p": 0.52,
-        "light_color_p": torch.tensor([1., 0.91, 0.88]),
-        "light_pos_p": torch.tensor([0.17, 2.77, -2.25])
+        "light_intensity_p": 0.62,
+        "light_color_p": torch.tensor([0.8, 0.97, 0.89]),
+        "light_pos_p": torch.tensor([1.19, -1.27, 2.24])
     }
     
     return camera_params, phong_params, light_params
@@ -437,7 +516,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     camera_params_opti, phong_params_opti, light_params_opti = get_optimal_params(hparams)
     if (CLIP_gt != None) or (DINO_gt != None):
         with torch.no_grad():
-            mean_image = render(sdf, lat_mean, camera_params_opti, phong_params_opti, light_params_opti)
+            mean_image = render(sdf, lat_mean, camera_params_opti, phong_params_opti, light_params_opti, color=False)
 
 
     opt_params = list(filter(lambda x: x is not None,[
@@ -521,7 +600,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         #if (CLIP_gt != None) or (DINO_gt != None):
         if (iteration == 0) or (iteration % 1 == 0):
             with torch.no_grad():
-                image = render(sdf, lat_rep, camera_params_opti, phong_params_opti, light_params_opti)
+                image = render(sdf, lat_rep, camera_params_opti, phong_params_opti, light_params_opti, color=False)
                 writer.add_image(f'rendered image of {prompt}', image.detach().numpy(), iteration, dataformats='HWC')
         
         if CLIP_gt != None:
