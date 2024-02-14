@@ -28,7 +28,7 @@ from utils.EMA import EMA
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 mode = "mono_nphm" # nphm, else mono_nphm
-opt_vars = ['geo', 'exp', 'app'] # add 'exp' and/or 'app'
+opt_vars = ['geo'] # add 'exp' and/or 'app'
 grad_vars = ['geo']
 
 CLIP_model, CLIP_preprocess = clip.load("ViT-B/32", device="cpu")
@@ -428,6 +428,38 @@ def get_augmented_params_no_color(lat_rep, hparams):
     
     return lat_rep_aug, camera_params_aug, phong_params_aug, light_params_aug
     
+    
+def batch_forward_img_mean(lat_rep_orig, prompt, hparams):
+    image_embeddings = []
+    for i in range(hparams['batch_size']):
+        if torch.rand(1) <= hparams['color_prob']:
+            # --- Random Augmentation ---
+            lat_rep, camera_params, phong_params, light_params = get_augmented_params_color(lat_rep_orig, hparams)
+            # --- Forward Pass ---
+            image_embedding, _ = get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params, color=True)
+        else:
+            # --- Random Augmentation ---
+            lat_rep, camera_params, phong_params, light_params = get_augmented_params_no_color(lat_rep_orig, hparams)
+            # --- Forward Pass ---
+            image_embedding, _ = get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params, color=False)
+        
+        image_embeddings.append(image_embedding)
+        
+    mean_embedding = torch.concat(image_embeddings, axis=0).mean(axis=0, keepdim=True)
+    
+    # --- Text Embedding ---
+    text_embedded_normalized = get_text_clip_embedding(prompt)
+    
+    # --- Delta CLIP Score ---
+    delta_CLIP_score = clip_score(mean_embedding, text_embedded_normalized)
+    
+    # --- Log Prob Score ---
+    prob_geo, prob_exp, prob_app = log_prop_score(lat_rep)
+    
+    return delta_CLIP_score, prob_geo, prob_exp, prob_app
+        
+        
+
 def batch_forward(lat_rep_orig, prompt, hparams):
     all_delta_CLIP_scores = []
     all_log_probs_geo = []
@@ -582,7 +614,12 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     #prof.step()
         
         #lat_rep_old = lat_rep.detach().cpu()
-        batch_delta_CLIP_score, batch_log_prob_geo_score, batch_log_prob_exp_score, batch_log_prob_app_score = batch_forward(lat_rep, prompt, hparams)
+        if hparams["mean_mode"] == "mean_embed":
+            batch_delta_CLIP_score, batch_log_prob_geo_score, batch_log_prob_exp_score, batch_log_prob_app_score = batch_forward_img_mean(lat_rep, prompt, hparams)
+        elif hparams["mean_mode"] == "mean_clip":
+            batch_delta_CLIP_score, batch_log_prob_geo_score, batch_log_prob_exp_score, batch_log_prob_app_score = batch_forward(lat_rep, prompt, hparams)
+        else:
+            raise ValueError(f"unknown mode: {mode}")
         sys.stdout.flush()
         batch_score = loss_fn(batch_delta_CLIP_score, batch_log_prob_geo_score, batch_log_prob_exp_score, batch_log_prob_app_score, hparams)
 
