@@ -492,7 +492,8 @@ def batch_forward(lat_rep_orig, prompt, hparams):
 
     return batch_delta_CLIP_score, batch_log_prob_geo, batch_log_prob_exp, batch_log_prob_app
 
-def get_optimal_params_no_color(hparams):
+# Optimal Params for rendering with color
+def get_optimal_params_color(hparams):
     camera_params = {
             "camera_distance": 0.34 * 2.57,
             "camera_angle_rho": 45.,
@@ -587,6 +588,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
     # --- Get Mean Image (required for CLIP and DINO validation) ---
     camera_params_opti, phong_params_opti, light_params_opti = get_optimal_params(hparams)
+    camera_params_opti_c, phong_params_opti_c, light_params_opti_c = get_optimal_params_color(hparams)
     if (CLIP_gt != None) or (DINO_gt != None):
         with torch.no_grad():
             mean_image = render(sdf, lat_mean, camera_params_opti, phong_params_opti, light_params_opti, color=False)
@@ -642,13 +644,13 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         
         #lat_rep_old = lat_rep.detach().cpu()
         if hparams["mean_mode"] == "mean_embed":
-            batch_delta_CLIP_score, batch_log_prob_geo_score, batch_log_prob_exp_score, batch_log_prob_app_score = batch_forward_img_mean(lat_rep, prompt, hparams)
+            batch_CLIP_score, batch_log_prob_geo_score, batch_log_prob_exp_score, batch_log_prob_app_score = batch_forward_img_mean(lat_rep, prompt, hparams)
         elif hparams["mean_mode"] == "mean_clip":
-            batch_delta_CLIP_score, batch_log_prob_geo_score, batch_log_prob_exp_score, batch_log_prob_app_score = batch_forward(lat_rep, prompt, hparams)
+            batch_CLIP_score, batch_log_prob_geo_score, batch_log_prob_exp_score, batch_log_prob_app_score = batch_forward(lat_rep, prompt, hparams)
         else:
             raise ValueError(f"unknown mode: {mode}")
-        sys.stdout.flush()
-        batch_score = loss_fn(batch_delta_CLIP_score, batch_log_prob_geo_score, batch_log_prob_exp_score, batch_log_prob_app_score, hparams)
+
+        batch_score = loss_fn(torch.clone(batch_CLIP_score), batch_log_prob_geo_score, batch_log_prob_exp_score, batch_log_prob_app_score, hparams)
 
         if batch_score > best_score:
             best_score = batch_score.detach().cpu()
@@ -656,8 +658,8 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             best_latent_exp = torch.clone(lat_rep[1]).cpu()
             best_latent_app = torch.clone(lat_rep[2]).cpu()
             
-        if batch_delta_CLIP_score > best_clip_score:
-            best_clip_score = batch_delta_CLIP_score.detach().cpu()
+        if batch_CLIP_score > best_clip_score:
+            best_clip_score = batch_CLIP_score.detach().cpu()
             #best_clip_latent = torch.clone(lat_rep).cpu()
 
         optimizer.zero_grad() 
@@ -668,7 +670,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         if (iteration == 0) or ((iteration+1) % 5 == 0):
             with torch.no_grad():
                 image_no_col = render(sdf, lat_rep, camera_params_opti, phong_params_opti, light_params_opti, color=False)
-                image_col = render(sdf, lat_rep, camera_params_opti, phong_params_opti, light_params_opti, color=True)
+                image_col = render(sdf, lat_rep, camera_params_opti_c, phong_params_opti_c, light_params_opti_c, color=True)
                 writer.add_image(f'rendered image of {prompt}', image_no_col.detach().numpy(), iteration, dataformats='HWC')
                 writer.add_image(f'textured rendered image of {prompt}', image_col.detach().numpy(), iteration, dataformats='HWC')
         
@@ -685,7 +687,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         #clip_grad_norm_([lat_rep], hparams['grad_norm'])
 
         writer.add_scalar('Batch Score', batch_score, iteration)
-        writer.add_scalar('Batch CLIP Score', batch_delta_CLIP_score, iteration)
+        writer.add_scalar('Batch CLIP Score', batch_CLIP_score, iteration)
         writer.add_scalar('Batch Log Prob Geometry Score', batch_log_prob_geo_score, iteration)
         writer.add_scalar('Batch Log Prob Expression Score', batch_log_prob_exp_score, iteration)
         writer.add_scalar('Batch Log Prob Appearance Score', batch_log_prob_app_score, iteration)
@@ -701,7 +703,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             gradient_lat_app = lat_app.grad
             writer.add_scalar('Gradient norm of Score w.r.t. Appearance Latent', gradient_lat_app.norm(), iteration)
 
-
+        sys.stdout.flush()
         optimizer.step()
         lr_scheduler.step(batch_score)
 
