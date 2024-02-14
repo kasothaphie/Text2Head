@@ -28,13 +28,15 @@ from utils.EMA import EMA
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 mode = "mono_nphm" # nphm, else mono_nphm
-opt_vars = ['geo'] # add 'exp' and/or 'app'
+# --- Specify what you want to optimize! ---
+opt_vars = ['geo'] # add 'exp' and/or 'app' (['geo', 'exp', 'app'])
 grad_vars = ['geo']
 
 CLIP_model, CLIP_preprocess = clip.load("ViT-B/32", device="cpu")
 #SigLIPmodel = open_clip.create_model("ViT-B-16-SigLIP", pretrained='webli', device="cpu")
 #tokenizer = open_clip.get_tokenizer('ViT-B-16-SigLIP')
 
+# TODO: Can we remove 'nphm' mode?
 if mode == "nphm":
     with open('../NPHM/scripts/configs/fitting_nphm.yaml', 'r') as f:
         CFG = yaml.safe_load(f)
@@ -214,30 +216,17 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params, color):
     #plt.imshow(image.detach().numpy())
     #plt.axis('off')  # Turn off axes
     #plt.show()
-    ##
-    delta_images_normalized = image_embedding
-    '''
-    # --- Render Image from Lat Mean WITH SAME PARAMS AS LAT REP + Embedd ---
-    #mean_image_embedding, _ = get_image_clip_embedding(lat_mean, camera_params, phong_params, light_params)
-    
-    # --- Difference between both embeddings ---
-    #delta_images = image_embedding - mean_image_embedding
-    delta_images = image_embedding
-    if delta_images.norm() >= 1e-9:
-        delta_images_normalized = delta_images / delta_images.norm(dim=-1, keepdim=True)
-    else:
-        delta_images_normalized = delta_images
-    '''
+
     # --- Text Embedding ---
     text_embedded_normalized = get_text_clip_embedding(prompt)
     
-    # --- Delta CLIP Score ---
-    delta_CLIP_score = clip_score(delta_images_normalized, text_embedded_normalized)
+    # --- CLIP Score ---
+    CLIP_score = clip_score(image_embedding, text_embedded_normalized)
     
     # --- Log Prob Score ---
     prob_geo, prob_exp, prob_app = log_prop_score(lat_rep)
 
-    return delta_CLIP_score, prob_geo, prob_exp, prob_app, torch.clone(image)
+    return CLIP_score, prob_geo, prob_exp, prob_app, torch.clone(image)
 
 def energy_level(lat_rep_1, lat_rep_2, prompt, hparams, steps=100):
     with torch.no_grad():
@@ -279,18 +268,21 @@ def get_augmented_params_color(lat_rep, hparams):
     lat_rep_aug = [lat_geo_aug, lat_exp_aug, lat_app_aug]
 
     # --- Camera Parameters Augmentation ---
-    camera_distance_factor = torch.rand(1).item() * 0.4 + 0.2 #random value [0.2, 0.6]
-    focal_length = torch.rand(1).item() * 1.3 + 2.7 #random value [2.7, 4.0]
-    angle = float(torch.randint(-50, 90, (1,)).item()) # random int [-45, 90]
+    camera_distance_factor = torch.rand(1).item() * 0.4 + 0.2 #random value [0.2, 0.35]
+    angle_rho = float(torch.randint(-50, 90, (1,)).item()) # random int [-45, 90]
+    angle_theta = torch.randn(1) * 10 # sample angle around 0, std 10
     camera_params_aug = {
-        "camera_distance": camera_distance_factor * focal_length,
-        "camera_angle": angle,
-        "focal_length": focal_length,
+        "camera_distance": camera_distance_factor * 2.57,
+        "camera_angle_rho": angle_rho,
+        "camera_angle_theta": angle_theta,
+        "focal_length": 2.57,
         "max_ray_length": 3,
         # Image
         "resolution_y": hparams["resolution"],
         "resolution_x": hparams["resolution"]
     }
+    # TODO: test whether rendering parameter augmentation has a positive impact on optimization with color
+    #_, phong_params_aug, light_params_aug = get_optimal_params_no_color(hparams)
 
     # --- Phong Parameters Augmentation ---
     amb_coeff = torch.rand(1).item() * 0.28 + 0.1 #random value [0.1, 0.38]
@@ -315,7 +307,7 @@ def get_augmented_params_color(lat_rep, hparams):
     amb_color_2 = torch.rand(1).item() * 0.21 + 0.62 #random value [0.62, 0.83]
     light_intensity_1 = torch.rand(1).item() * 0.7 + 1.1 #random value [1.1, 1.8]
     light_intensity_p = torch.rand(1).item() * 0.3 + 0.2 #random value [0.2, 0.5]
-    if angle >= 0:
+    if angle_rho >= 0:
         light_dir_0 = torch.rand(1).item() * 0.11 - 0.95 #random value [-0.84, -0.95]
         light_pos_0 = 0.17
     else:
@@ -340,11 +332,13 @@ def get_augmented_params_color(lat_rep, hparams):
 def get_augmented_params_no_color(lat_rep, hparams):
     # --- Latent Representation Augmentation ---
     # Generate random values from a normal distribution with standard deviation alpha
+    # TODO: This shift is not used for now b/c no positive impact --> to be verified!
     if 'geo' in opt_vars:
-        random_multipliers_geo = torch.randn(geo_std.shape) * hparams["alpha"]
-        shift_geo = geo_std.cpu() * random_multipliers_geo
-        shift_geo = shift_geo.to(device)
-        lat_geo_aug = lat_rep[0] + shift_geo
+        #random_multipliers_geo = torch.randn(geo_std.shape) * hparams["alpha"]
+        #shift_geo = geo_std.cpu() * random_multipliers_geo
+        #shift_geo = shift_geo.to(device)
+        #lat_geo_aug = lat_rep[0] + shift_geo
+        lat_geo_aug = lat_rep[0]
     else:
         lat_geo_aug = lat_rep[0]
     
@@ -368,12 +362,13 @@ def get_augmented_params_no_color(lat_rep, hparams):
 
     # --- Camera Parameters Augmentation ---
     camera_distance_factor = torch.rand(1).item() * 0.05 + 0.2 #random value [0.2, 0.25]
-    focal_length = torch.rand(1).item() * 0.4 + 2.5 #random value [2.5, 3.3]
-    angle = float(torch.randint(-50, 90, (1,)).item()) # random int [-45, 90]
+    angle_rho = float(torch.randint(-50, 90, (1,)).item()) # random int [-45, 90]
+    angle_theta = torch.randn(1) * 10 # sample angle around 0, std 10
     camera_params_aug = {
-        "camera_distance": camera_distance_factor * focal_length,
-        "camera_angle": angle,
-        "focal_length": focal_length,
+        "camera_distance": camera_distance_factor * 2.57,
+        "camera_angle_rho": angle_rho,
+        "camera_angle_theta": angle_theta,
+        "focal_length": 2.57,
         "max_ray_length": 3,
         # Image
         "resolution_y": hparams["resolution"],
@@ -406,7 +401,7 @@ def get_augmented_params_no_color(lat_rep, hparams):
     amb_color_2 = torch.rand(1).item() * 0.05 + 0.54 #random value [0.54, 0.59]
     light_intensity_1 = torch.rand(1).item() * 0.3 + 1.3 #random value [1.3, 1.6]
     light_intensity_p = torch.rand(1).item() * 0.26 + 0.58 #random value [0.58, 0.84]
-    if angle >= 0:
+    if angle_rho >= 0:
         light_dir_0 = torch.rand(1).item() * 0.05 - 0.6 #random value [-0.6, -0.55]
         light_pos_0 = 1.19
     else:
@@ -497,11 +492,48 @@ def batch_forward(lat_rep_orig, prompt, hparams):
 
     return batch_delta_CLIP_score, batch_log_prob_geo, batch_log_prob_exp, batch_log_prob_app
 
+def get_optimal_params_no_color(hparams):
+    camera_params = {
+            "camera_distance": 0.34 * 2.57,
+            "camera_angle_rho": 45.,
+            "camera_angle_theta": 0.,
+            "focal_length": 2.57,
+            "max_ray_length": 3,
+            # Image
+            "resolution_y": hparams['resolution'],
+            "resolution_x": hparams['resolution']
+        }
+    
+    phong_params = {
+            "ambient_coeff": 0.32,
+            "diffuse_coeff": 0.85,
+            "specular_coeff": 0.34,
+            "shininess": 25,
+            # Colors
+            "object_color": torch.tensor([0.53, 0.24, 0.64]),
+            "background_color": torch.tensor([0.75, 0.85, 0.31])
+        }
+
+    light_params = {
+            "amb_light_color": torch.tensor([0.65, 0.66, 0.69]),
+            # light 1
+            "light_intensity_1": 1.69,
+            "light_color_1": torch.tensor([1., 0.91, 0.88]),
+            "light_dir_1": torch.tensor([-0.85, -0.18, -0.8]),
+            # light p
+            "light_intensity_p": 0.52,
+            "light_color_p": torch.tensor([1., 0.91, 0.88]),
+            "light_pos_p": torch.tensor([0.17, 2.77, -2.25])
+    }
+    return camera_params, phong_params, light_params
+
+
 # Optimial Params for Rendering without color
 def get_optimal_params(hparams):
     camera_params = {
         "camera_distance": 0.21 * 2.57,
-        "camera_angle": 45.,
+        "camera_angle_rho": 45.,
+        "camera_angle_theta": 0.,
         "focal_length": 2.57,
         "max_ray_length": 3,
         # Image
@@ -537,6 +569,8 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
     global geo_mean, geo_std, exp_mean, exp_std, app_mean, app_std
 
+    print('Optimization Mode: ', opt_vars)
+
     if init_lat is None:
         init_geo = torch.randn_like(geo_std) * geo_std * 0.85 + geo_mean
         init_exp = torch.randn_like(exp_std) * exp_std * 0.85 + exp_mean
@@ -564,18 +598,11 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         lat_app if 'app' in opt_vars else None,
     ]))
     
-    if hparams['optimizer'] == 'Adam':
-        optimizer = Adam(params=opt_params,
-                        lr=hparams['optimizer_lr'],
-                        betas=(0.9, 0.999),
-                        weight_decay=0,
-                        maximize=True)
-    elif hparams['optimizer'] == 'EMA':
-        optimizer = EMA(params=opt_params,
-                     lr=hparams['optimizer_lr'],
-                     beta=hparams['EMA_beta'],
-                     weight_decay=0,
-                     maximize=True)
+    optimizer = Adam(params=opt_params,
+                    lr=hparams['optimizer_lr'],
+                    betas=(0.9, 0.999),
+                    weight_decay=0,
+                    maximize=True)
 
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
@@ -587,7 +614,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
     # Normal Mode
     now = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
-    writer = SummaryWriter(log_dir=f'../runs/mono/train-time:{now}')
+    writer = SummaryWriter(log_dir=f'../runs/c/train-time:{now}')
 
     best_score = torch.tensor([-torch.inf]).cpu()
     best_clip_score = torch.tensor([-torch.inf]).cpu()
@@ -635,10 +662,6 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
         optimizer.zero_grad() 
         batch_score.backward()
-        
-        # Manually modify the gradient to set NaN values to zero
-        lat_geo.grad = lat_geo.grad.nan_to_num(0.)
-        #lat_exp.grad = lat_exp.grad.nan_to_num(0.)
 
         # --- Validation with CLIP / DINO Delta Score ---
         #if (CLIP_gt != None) or (DINO_gt != None):
@@ -651,12 +674,12 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         
         if CLIP_gt != None:
             CLIP_gt_similarity, CLIP_delta_sim = CLIP_similarity(image_no_col, CLIP_gt, mean_image)
-            writer.add_scalar('CLIP similarity to ground truth image', CLIP_gt_similarity, iteration)
+            #writer.add_scalar('CLIP similarity to ground truth image', CLIP_gt_similarity, iteration)
             writer.add_scalar('CLIP delta similarity', CLIP_delta_sim, iteration)
 
         if DINO_gt != None:
             DINO_gt_similarity, DINO_delta_sim = DINO_similarity(image_no_col, DINO_gt, mean_image)
-            writer.add_scalar('DINO similarity to ground truth image', DINO_gt_similarity, iteration)
+            #writer.add_scalar('DINO similarity to ground truth image', DINO_gt_similarity, iteration)
             writer.add_scalar('DINO delta similarity', DINO_delta_sim, iteration)
         
         #clip_grad_norm_([lat_rep], hparams['grad_norm'])
@@ -668,6 +691,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         writer.add_scalar('Batch Log Prob Appearance Score', batch_log_prob_app_score, iteration)
         writer.add_scalar('learning rate', optimizer.param_groups[0]['lr'], iteration)
         if 'geo' in opt_vars:
+            lat_geo.grad = lat_geo.grad.nan_to_num(0.) # TODO: is this still needed?
             gradient_lat_geo = lat_geo.grad
             writer.add_scalar('Gradient norm of Score w.r.t. Geometry Latent', gradient_lat_geo.norm(), iteration)
         if 'exp' in opt_vars:

@@ -165,6 +165,35 @@ def two_phase_tracing(sdf, camera_position, norm_directions, max_length, scale=n
 
     return hits, hit_mask
 
+def rotate(camera_params, camera_position_in, directions_in):
+    '''
+    directions [N, 3]
+    camera [3]
+    '''
+    angle_radians_rho = torch.deg2rad_(torch.tensor(camera_params["camera_angle_rho"]))
+    angle_radians_theta = torch.deg2rad_(torch.tensor(camera_params["camera_angle_theta"]))
+    
+    # rotate about y-axis
+    rotation_matrix_y = torch.tensor([[torch.cos(angle_radians_rho), 0, torch.sin(angle_radians_rho)],
+                                    [0, 1, 0],
+                                    [-torch.sin(angle_radians_rho), 0, torch.cos(angle_radians_rho)]])
+    # rotate about x-axis
+    rotation_matrix_x = torch.tensor([[1, 0, 0],
+                                       [0, torch.cos(angle_radians_theta), -torch.sin(angle_radians_theta)], 
+                                       [0, torch.sin(angle_radians_theta), torch.cos(angle_radians_theta)]])
+    # first rotate about y then about x axis
+    rotation_matrix = rotation_matrix_y @ rotation_matrix_x
+
+    rotated_directions = torch.matmul(directions_in, rotation_matrix.T)
+    camera_rot = torch.matmul(rotation_matrix, camera_position_in.float())
+
+    transposed_directions = rotated_directions.T  # transpose is necessary for normalization
+    directions = (transposed_directions / transposed_directions.norm(dim=0)).T  # [pu*pv, 3]
+    
+    camera_position = camera_rot * (camera_params["camera_distance"] + camera_params["focal_length"]) / camera_rot.norm()
+
+    return directions, camera_position
+
 
 def render(model, lat_rep, camera_params, phong_params, light_params, color=True, mesh_path=None, model_grads=[]):
 
@@ -192,10 +221,6 @@ def render(model, lat_rep, camera_params, phong_params, light_params, color=True
     pv = camera_params["resolution_y"]
     image = phong_params["background_color"].repeat(pu * pv, 1)
 
-    angle_radians = torch.deg2rad_(torch.tensor(camera_params["camera_angle"]))
-    camera = torch.tensor([torch.sin(angle_radians), 0, torch.cos(angle_radians)])
-    camera_position = camera * (camera_params["camera_distance"] + camera_params["focal_length"]) / camera.norm()
-
     # Normalize the xy value of the current pixel [-0.5, 0.5]
     u_norms = ((torch.arange(pu) + 0.5) / pu - 0.5) * pu / pv
     v_norms = 0.5 - (torch.arange(pv) + 0.5) / pv
@@ -205,16 +230,11 @@ def render(model, lat_rep, camera_params, phong_params, light_params, color=True
         torch.meshgrid(u_norms, v_norms, torch.tensor(-camera_params["focal_length"]), indexing='ij'), dim=-1)
     directions_unn = directions_unn.reshape(
         (pu * pv, 3))  # [pu, pv, 3] --> [pu*pv, 3] (u1, v1, f)(u1, v2, f)...(u2, v1, f)...
-    directions_unn = directions_unn
 
-    # rotate about y-axis
-    rotation_matrix = torch.tensor([[torch.cos(angle_radians), 0, torch.sin(angle_radians)],
-                                    [0, 1, 0],
-                                    [-torch.sin(angle_radians), 0, torch.cos(angle_radians)]])
-    rotated_directions = torch.matmul(directions_unn, rotation_matrix.T)
+    camera = torch.tensor([0, 0, 1])
 
-    transposed_directions = rotated_directions.T  # transpose is necessary for normalization
-    directions = (transposed_directions / transposed_directions.norm(dim=0)).T  # [pu*pv, 3]
+    # rotate direction vectors and camera position
+    directions, camera_position = rotate(camera_params, camera, directions_unn)
 
     with torch.no_grad():
         # start close to head model to get useful sdf scores
