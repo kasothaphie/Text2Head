@@ -29,6 +29,7 @@ from utils.EMA import EMA
 device = "cuda" if torch.cuda.is_available() else "cpu"
 mode = "mono_nphm" # nphm, else mono_nphm
 opt_vars = ['geo', 'exp', 'app'] # add 'exp' and/or 'app'
+grad_vars = ['geo']
 
 CLIP_model, CLIP_preprocess = clip.load("ViT-B/32", device="cpu")
 #SigLIPmodel = open_clip.create_model("ViT-B-16-SigLIP", pretrained='webli', device="cpu")
@@ -94,7 +95,9 @@ elif mode == "mono_nphm":
         modalities=modalities,
         n_latents=n_lats,
         device=device,
-        include_color_branch=True
+        neutral_only=False,
+        include_color_branch=True,
+        skip_exp_grads= ('exp' not in grad_vars)
     )
 
     # load checkpoint from trained NPHM model, including the latent codes
@@ -138,10 +141,15 @@ else:
     raise ValueError(f"unknown mode: {mode}")
 
 def loss_fn(clip_score, prob_geo_score, prob_exp_score, prob_app_score, hparams):
-    return (clip_score + hparams["lambda"] * (prob_geo_score + prob_exp_score + prob_app_score)) / (1 + hparams["lambda"])
+    loss = clip_score
+    loss += hparams["lambda_geo"] * prob_geo_score
+    loss += hparams["lambda_exp"] * prob_exp_score
+    loss += hparams["lambda_app"] * prob_app_score
+    loss /= 1 + hparams["lambda_geo"] + hparams["lambda_exp"] + hparams["lambda_app"]
+    return loss
 
 def get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params, color):
-    image = render(sdf, lat_rep, camera_params, phong_params, light_params, color)
+    image = render(sdf, lat_rep, camera_params, phong_params, light_params, color, model_grads=grad_vars)
     image_c_first = image.permute(2, 0, 1)
     image_preprocessed = clip_tensor_preprocessor(image_c_first).unsqueeze(0).cpu()
     CLIP_embedding_image = CLIP_model.encode_image(image_preprocessed) # [1, 512]
@@ -230,7 +238,6 @@ def forward(lat_rep, prompt, camera_params, phong_params, light_params, color):
     prob_geo, prob_exp, prob_app = log_prop_score(lat_rep)
 
     return delta_CLIP_score, prob_geo, prob_exp, prob_app, torch.clone(image)
-
 
 def energy_level(lat_rep_1, lat_rep_2, prompt, hparams, steps=100):
     with torch.no_grad():
@@ -598,18 +605,20 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
         # --- Validation with CLIP / DINO Delta Score ---
         #if (CLIP_gt != None) or (DINO_gt != None):
-        if (iteration == 0) or (iteration % 1 == 0):
+        if (iteration == 0) or ((iteration+1) % 5 == 0):
             with torch.no_grad():
-                image = render(sdf, lat_rep, camera_params_opti, phong_params_opti, light_params_opti, color=False)
-                writer.add_image(f'rendered image of {prompt}', image.detach().numpy(), iteration, dataformats='HWC')
+                image_no_col = render(sdf, lat_rep, camera_params_opti, phong_params_opti, light_params_opti, color=False)
+                image_col = render(sdf, lat_rep, camera_params_opti, phong_params_opti, light_params_opti, color=True)
+                writer.add_image(f'rendered image of {prompt}', image_no_col.detach().numpy(), iteration, dataformats='HWC')
+                writer.add_image(f'textured rendered image of {prompt}', image_col.detach().numpy(), iteration, dataformats='HWC')
         
         if CLIP_gt != None:
-            CLIP_gt_similarity, CLIP_delta_sim = CLIP_similarity(image, CLIP_gt, mean_image)
+            CLIP_gt_similarity, CLIP_delta_sim = CLIP_similarity(image_no_col, CLIP_gt, mean_image)
             writer.add_scalar('CLIP similarity to ground truth image', CLIP_gt_similarity, iteration)
             writer.add_scalar('CLIP delta similarity', CLIP_delta_sim, iteration)
 
         if DINO_gt != None:
-            DINO_gt_similarity, DINO_delta_sim = DINO_similarity(image, DINO_gt, mean_image)
+            DINO_gt_similarity, DINO_delta_sim = DINO_similarity(image_no_col, DINO_gt, mean_image)
             writer.add_scalar('DINO similarity to ground truth image', DINO_gt_similarity, iteration)
             writer.add_scalar('DINO delta similarity', DINO_delta_sim, iteration)
         

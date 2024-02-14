@@ -2,6 +2,7 @@ import torch
 from torch import nn
 from typing import Optional, Literal, List
 from inspect import getfullargspec
+from contextlib import nullcontext
 
 from nphm_tum.models.diff_operators import gradient
 from nphm_tum.models.canonical_space import get_id_model
@@ -20,13 +21,15 @@ class nn3dmm(nn.Module):
                  id_model,
                  ex_model,
                  expr_direction : Optional[Literal['forward', 'backward', 'monolith']],
-                 neutral_only : bool = False):
+                 neutral_only : bool = False,
+                 skip_exp_grads : bool = False):
         super().__init__()
 
         self.id_model = id_model
         self.ex_model = ex_model
         self.expr_direction = expr_direction
         self.neutral_only =neutral_only
+        self.skip_exp_grads=skip_exp_grads
 
 
     def forward(self,
@@ -67,25 +70,26 @@ class nn3dmm(nn.Module):
             if hasattr(self.id_model, 'mlp_pos') and self.id_model.mlp_pos is not None and 'anchors' not in in_dict:
                 in_dict.update({'anchors': self.id_model.get_anchors(cond['geo'])})
 
-            # perform backward deformation
-            if not self.neutral_only:
+            with torch.no_grad() if self.skip_exp_grads else nullcontext():
+                # perform backward deformation
+                if not self.neutral_only:
 
-                # not sure where this would ever be used
-                if ignore_deformations:
-                    out_ex = self.ex_model(in_dict)
-                    queries_canonical = in_dict['queries']
-                    if self.ex_model.n_hyper > 0:
-                        queries_canonical = torch.cat([queries_canonical, torch.zeros_like(out_ex['hyper_coords'])], dim=-1)
+                    # not sure where this would ever be used
+                    if ignore_deformations:
+                        out_ex = self.ex_model(in_dict)
+                        queries_canonical = in_dict['queries']
+                        if self.ex_model.n_hyper > 0:
+                            queries_canonical = torch.cat([queries_canonical, torch.zeros_like(out_ex['hyper_coords'])], dim=-1)
+                    else:
+                        out_ex = self.ex_model(in_dict)
+                        queries_canonical = in_dict['queries'] + out_ex['offsets']
+                        # append predicted hyper dimensions
+                        if self.ex_model.n_hyper > 0:
+                            queries_canonical = torch.cat([queries_canonical, out_ex['hyper_coords']], dim=-1)
+                # do nothing
                 else:
-                    out_ex = self.ex_model(in_dict)
-                    queries_canonical = in_dict['queries'] + out_ex['offsets']
-                    # append predicted hyper dimensions
-                    if self.ex_model.n_hyper > 0:
-                        queries_canonical = torch.cat([queries_canonical, out_ex['hyper_coords']], dim=-1)
-            # do nothing
-            else:
-                out_ex = {'offsets': torch.zeros_like(in_dict['queries'])}
-                queries_canonical = in_dict['queries']
+                    out_ex = {'offsets': torch.zeros_like(in_dict['queries'])}
+                    queries_canonical = torch.cat([in_dict['queries'], torch.zeros((1, in_dict['queries'].shape[1], self.ex_model.n_hyper))], dim=-1)
 
             in_dict.update({'queries_can': queries_canonical, 'offsets': out_ex['offsets']})
 
@@ -258,7 +262,9 @@ def construct_n3dmm(cfg : dict,
                     modalities : List[Literal['geo', 'app', 'exp']],
                     n_latents : list[int],
                     device : torch._C.device = 0,
-                    include_color_branch : bool = False
+                    include_color_branch : bool = False,
+                    neutral_only: bool = False,
+                    skip_exp_grads: bool = False
                     ):
     '''
     Construct a neural parametric head model from a given config dictionary.
@@ -284,6 +290,8 @@ def construct_n3dmm(cfg : dict,
     n3dmm = nn3dmm(id_model=id_model,
                    ex_model=ex_model,
                    expr_direction='backward',
+                   neutral_only=neutral_only,
+                   skip_exp_grads=skip_exp_grads
                    ).to(device)
 
     #latent_codes = LatentCodes(n_latents=n_latents,

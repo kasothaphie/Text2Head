@@ -6,11 +6,19 @@ from torch.utils.checkpoint import checkpoint
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-def phong_model(sdf, points, camera_position, phong_params, light_params):
+def phong_model(sdf, points, camera_position, phong_params, light_params, model_grads=[]):
 
-    # TODO combine estimate_colors and estimate_normals to save one call to sdf
-    colors = estimate_colors(sdf, points)
-    normals = estimate_normals(sdf, points)
+    if 'app' in model_grads:
+        colors = estimate_colors(sdf, points)
+    else:
+        with torch.no_grad():
+            colors = estimate_colors(sdf, points)
+            
+    if 'geo' in model_grads:
+        normals = estimate_normals(sdf, points)
+    else:
+        with torch.no_grad():
+            normals = estimate_normals(sdf, points)
     view_dirs = points - camera_position
     light_dir_1 = light_params["light_dir_1"].repeat(points.shape[0], 1)
     light_dir_p = points - light_params["light_pos_p"].repeat(points.shape[0], 1)
@@ -158,12 +166,12 @@ def two_phase_tracing(sdf, camera_position, norm_directions, max_length, scale=n
     return hits, hit_mask
 
 
-def render(model, lat_rep, camera_params, phong_params, light_params, color=True, mesh_path=None):
+def render(model, lat_rep, camera_params, phong_params, light_params, color=True, mesh_path=None, model_grads=[]):
 
     def sdf(positions, chunk_size=10000):
     
         def get_sdf(nphm_input, lat_rep_in):
-            #distance = model(nphm_input.to(device), lat_rep_in, None)[0].to("cpu")
+            #distance, color = model(nphm_input.to(device), *lat_rep_in)
             distance, color = checkpoint(model, *[nphm_input.to(device), *lat_rep_in])
             distance = distance.to("cpu")
             color = color.to("cpu")
@@ -241,7 +249,7 @@ def render(model, lat_rep, camera_params, phong_params, light_params, color=True
             no_gradient_mask = ~gradient_mask
 
             no_gradient_reflections, no_gradient_colors = phong_model(sdf, phong_points[no_gradient_mask, :], camera_position, phong_params, light_params)
-        gradient_reflections, gradient_colors = phong_model(sdf, phong_points[gradient_mask, :], camera_position, phong_params, light_params)
+        gradient_reflections, gradient_colors = phong_model(sdf, phong_points[gradient_mask, :], camera_position, phong_params, light_params, model_grads=model_grads)
         reflections = torch.zeros_like(phong_points).float() 
         colors = torch.zeros_like(phong_points).float()
         reflections[gradient_mask] = gradient_reflections
@@ -249,7 +257,7 @@ def render(model, lat_rep, camera_params, phong_params, light_params, color=True
         colors[gradient_mask] = gradient_colors
         colors[no_gradient_mask] = no_gradient_colors
     else:
-        reflections, colors = phong_model(sdf, phong_points, camera_position, phong_params, light_params)
+        reflections, colors = phong_model(sdf, phong_points, camera_position, phong_params, light_params, model_grads=model_grads)
         
 
     # Assign a color for objects
