@@ -143,11 +143,25 @@ else:
     raise ValueError(f"unknown mode: {mode}")
 
 def loss_fn(clip_score, prob_geo_score, prob_exp_score, prob_app_score, hparams):
+    if 'geo' in opt_vars:
+        lambda_geo = hparams["lambda_geo"]
+    else:
+        lambda_geo = 0
+    if 'exp' in opt_vars:
+        lambda_exp = hparams["lambda_exp"]
+    else:
+        lambda_exp = 0
+    if 'app' in opt_vars:
+        lambda_app = hparams["lambda_app"]
+    else:
+        lambda_app = 0
+
     loss = clip_score
-    loss += hparams["lambda_geo"] * prob_geo_score
-    loss += hparams["lambda_exp"] * prob_exp_score
-    loss += hparams["lambda_app"] * prob_app_score
-    loss /= 1 + hparams["lambda_geo"] + hparams["lambda_exp"] + hparams["lambda_app"]
+    loss += lambda_geo * prob_geo_score
+    loss += lambda_exp * prob_exp_score
+    loss += lambda_app * prob_app_score
+    loss /= 1 + lambda_geo + lambda_exp + lambda_app
+
     return loss
 
 def get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params, color):
@@ -268,7 +282,7 @@ def get_augmented_params_color(lat_rep, hparams):
     lat_rep_aug = [lat_geo_aug, lat_exp_aug, lat_app_aug]
 
     # --- Camera Parameters Augmentation ---
-    camera_distance_factor = torch.rand(1).item() * 0.4 + 0.2 #random value [0.2, 0.35]
+    camera_distance_factor = torch.randn(1).item() * 0.05 + 0.2 # originally: random value [0.2, 0.35]
     angle_rho = float(torch.randint(-50, 90, (1,)).item()) # random int [-45, 90]
     angle_theta = torch.randn(1) * 10 # sample angle around 0, std 10
     camera_params_aug = {
@@ -307,11 +321,18 @@ def get_augmented_params_color(lat_rep, hparams):
     amb_color_2 = torch.rand(1).item() * 0.21 + 0.62 #random value [0.62, 0.83]
     light_intensity_1 = torch.rand(1).item() * 0.7 + 1.1 #random value [1.1, 1.8]
     light_intensity_p = torch.rand(1).item() * 0.3 + 0.2 #random value [0.2, 0.5]
+    # switch light directions depending on view point
     if angle_rho >= 0:
-        light_dir_0 = torch.rand(1).item() * 0.11 - 0.95 #random value [-0.84, -0.95]
+        if angle_rho >= 15:
+            light_dir_0 = torch.rand(1).item() * 0.11 - 0.95 #random value [-0.84, -0.95]
+        else:
+            light_dir_0 = torch.rand(1).item() * 0.1 - 0.05 #random value [-0.05, 0.05]
         light_pos_0 = 0.17
     else:
-        light_dir_0 = torch.rand(1).item() * 0.11 + 0.84 #random value [0.84, 0.95]
+        if angle_rho <= -15:
+            light_dir_0 = torch.rand(1).item() * 0.11 + 0.84 #random value [0.84, 0.95]
+        else:
+            light_dir_0 = torch.rand(1).item() * 0.1 - 0.05 #random value [-0.05, 0.05]
         light_pos_0 = -0.17
     light_dir_1 = torch.rand(1).item() * 0.33 - 0.5 #random value [-0.17, -0.5]
     light_dir_2 = torch.rand(1).item() * 0.2 - 0.84 #random value [-0.64, -0.84]
@@ -361,7 +382,7 @@ def get_augmented_params_no_color(lat_rep, hparams):
     lat_rep_aug = [lat_geo_aug, lat_exp_aug, lat_app_aug]
 
     # --- Camera Parameters Augmentation ---
-    camera_distance_factor = torch.rand(1).item() * 0.05 + 0.2 #random value [0.2, 0.25]
+    camera_distance_factor = torch.randn(1).item() * 0.07 + 0.21 # originally: random value [0.2, 0.25]
     angle_rho = float(torch.randint(-50, 90, (1,)).item()) # random int [-45, 90]
     angle_theta = torch.randn(1) * 10 # sample angle around 0, std 10
     camera_params_aug = {
@@ -401,11 +422,18 @@ def get_augmented_params_no_color(lat_rep, hparams):
     amb_color_2 = torch.rand(1).item() * 0.05 + 0.54 #random value [0.54, 0.59]
     light_intensity_1 = torch.rand(1).item() * 0.3 + 1.3 #random value [1.3, 1.6]
     light_intensity_p = torch.rand(1).item() * 0.26 + 0.58 #random value [0.58, 0.84]
+    # switch light directions depending on view point
     if angle_rho >= 0:
-        light_dir_0 = torch.rand(1).item() * 0.05 - 0.6 #random value [-0.6, -0.55]
+        if angle_rho >= 15:
+            light_dir_0 = torch.rand(1).item() * 0.05 - 0.6 #random value [-0.6, -0.55]
+        else:
+            light_dir_0 = torch.rand(1).item() * 0.1 - 0.05 #random value [-0.05, 0.05]
         light_pos_0 = 1.19
     else:
-        light_dir_0 = torch.rand(1).item() * 0.05 + 0.55 #random value [0.55, 0.6]
+        if angle_rho <= -15:
+            light_dir_0 = torch.rand(1).item() * 0.05 + 0.55 #random value [0.55, 0.6]
+        else:
+            light_dir_0 = torch.rand(1).item() * 0.1 - 0.05 #random value [-0.05, 0.05]
         light_pos_0 = -1.19
     light_dir_1 = torch.rand(1).item() * 0.05 - 0.43 #random value [-0.43, -0.38]
     light_dir_2 = torch.rand(1).item() * 0.1 - 0.71 #random value [-0.71, -0.61]
@@ -570,7 +598,10 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
     global geo_mean, geo_std, exp_mean, exp_std, app_mean, app_std
 
+    print('######## SETTINGS ########')
     print('Optimization Mode: ', opt_vars)
+    print('Models considered for backpropagating gradients:', grad_vars)
+    print('###########################')
 
     if init_lat is None:
         init_geo = torch.randn_like(geo_std) * geo_std * 0.85 + geo_mean
@@ -664,6 +695,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
         optimizer.zero_grad() 
         batch_score.backward()
+        sys.stdout.flush()
 
         # --- Validation with CLIP / DINO Delta Score ---
         #if (CLIP_gt != None) or (DINO_gt != None):
@@ -703,7 +735,6 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             gradient_lat_app = lat_app.grad
             writer.add_scalar('Gradient norm of Score w.r.t. Appearance Latent', gradient_lat_app.norm(), iteration)
 
-        sys.stdout.flush()
         optimizer.step()
         lr_scheduler.step(batch_score)
 
