@@ -256,10 +256,12 @@ def get_augmented_params_color(lat_rep, hparams):
     # --- Latent Representation Augmentation ---
     # Generate random values from a normal distribution with standard deviation alpha
     if 'geo' in opt_vars:
-        random_multipliers_geo = torch.randn(geo_std.shape) * hparams["alpha"]
-        shift_geo = geo_std.cpu() * random_multipliers_geo
-        shift_geo = shift_geo.to(device)
-        lat_geo_aug = lat_rep[0] + shift_geo
+        # TODO: This shift is not used for now b/c no positive impact --> to be verified!
+        #random_multipliers_geo = torch.randn(geo_std.shape) * hparams["alpha"]
+        #shift_geo = geo_std.cpu() * random_multipliers_geo
+        #shift_geo = shift_geo.to(device)
+        #lat_geo_aug = lat_rep[0] + shift_geo
+        lat_geo_aug = lat_rep[0]
     else:
         lat_geo_aug = lat_rep[0]
     
@@ -353,12 +355,11 @@ def get_augmented_params_color(lat_rep, hparams):
 def get_augmented_params_no_color(lat_rep, hparams):
     # --- Latent Representation Augmentation ---
     # Generate random values from a normal distribution with standard deviation alpha
-    # TODO: This shift is not used for now b/c no positive impact --> to be verified!
     if 'geo' in opt_vars:
-        #random_multipliers_geo = torch.randn(geo_std.shape) * hparams["alpha"]
-        #shift_geo = geo_std.cpu() * random_multipliers_geo
-        #shift_geo = shift_geo.to(device)
-        #lat_geo_aug = lat_rep[0] + shift_geo
+        random_multipliers_geo = torch.randn(geo_std.shape) * hparams["alpha"]
+        shift_geo = geo_std.cpu() * random_multipliers_geo
+        shift_geo = shift_geo.to(device)
+        lat_geo_aug = lat_rep[0] + shift_geo
         lat_geo_aug = lat_rep[0]
     else:
         lat_geo_aug = lat_rep[0]
@@ -647,7 +648,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
     # Normal Mode
     now = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
-    writer = SummaryWriter(log_dir=f'../runs/c/train-time:{now}')
+    writer = SummaryWriter(log_dir=f'../runs/e/train-time:{now}')
 
     best_score = torch.tensor([-torch.inf]).cpu()
     best_clip_score = torch.tensor([-torch.inf]).cpu()
