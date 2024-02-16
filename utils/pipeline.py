@@ -257,11 +257,11 @@ def get_augmented_params_color(lat_rep, hparams):
     # Generate random values from a normal distribution with standard deviation alpha
     if 'geo' in opt_vars:
         # TODO: This shift is not used for now b/c no positive impact --> to be verified!
-        #random_multipliers_geo = torch.randn(geo_std.shape) * hparams["alpha"]
-        #shift_geo = geo_std.cpu() * random_multipliers_geo
-        #shift_geo = shift_geo.to(device)
-        #lat_geo_aug = lat_rep[0] + shift_geo
-        lat_geo_aug = lat_rep[0]
+        random_multipliers_geo = torch.randn(geo_std.shape) * hparams["alpha"]
+        shift_geo = geo_std.cpu() * random_multipliers_geo
+        shift_geo = shift_geo.to(device)
+        lat_geo_aug = lat_rep[0] + shift_geo
+        #lat_geo_aug = lat_rep[0]
     else:
         lat_geo_aug = lat_rep[0]
     
@@ -298,7 +298,7 @@ def get_augmented_params_color(lat_rep, hparams):
         "resolution_x": hparams["resolution"]
     }
     # TODO: test whether rendering parameter augmentation has a positive impact on optimization with color
-    #_, phong_params_aug, light_params_aug = get_optimal_params_no_color(hparams)
+    #_, phong_params_aug, light_params_aug = get_optimal_params_color(hparams)
 
     # --- Phong Parameters Augmentation ---
     amb_coeff = torch.rand(1).item() * 0.28 + 0.1 #random value [0.1, 0.38]
@@ -397,6 +397,9 @@ def get_augmented_params_no_color(lat_rep, hparams):
         "resolution_x": hparams["resolution"]
     }
 
+    #_, phong_params_aug, light_params_aug = get_optimal_params(hparams)
+
+
     # --- Phong Parameters Augmentation ---
     amb_coeff = torch.rand(1).item() * 0.06 + 0.47 #random value [0.47, 0.53]
     diffuse_coeff = torch.rand(1).item() * 0.1 + 0.7 #random value [0.7, 0.8]
@@ -449,7 +452,7 @@ def get_augmented_params_no_color(lat_rep, hparams):
         "light_color_p": torch.tensor([0.8, 0.97, 0.89]),
         "light_pos_p": torch.tensor([light_pos_0, -1.27, 2.24])
     }
-    
+
     return lat_rep_aug, camera_params_aug, phong_params_aug, light_params_aug
     
     
@@ -648,7 +651,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
     # Normal Mode
     now = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
-    writer = SummaryWriter(log_dir=f'../runs/e/train-time:{now}')
+    writer = SummaryWriter(log_dir=f'../runs/a/train-time:{now}')
 
     best_score = torch.tensor([-torch.inf]).cpu()
     best_clip_score = torch.tensor([-torch.inf]).cpu()
@@ -700,12 +703,14 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
         # --- Validation with CLIP / DINO Delta Score ---
         #if (CLIP_gt != None) or (DINO_gt != None):
-        if (iteration == 0) or ((iteration+1) % 5 == 0):
+        if (iteration == 0) or ((iteration+1) % 2 == 0):
             with torch.no_grad():
-                image_no_col = render(sdf, lat_rep, camera_params_opti, phong_params_opti, light_params_opti, color=False)
-                image_col = render(sdf, lat_rep, camera_params_opti_c, phong_params_opti_c, light_params_opti_c, color=True)
+                CLIP_score_no_col, _, _, _, image_no_col = forward(lat_rep, prompt, camera_params_opti, phong_params_opti, light_params_opti, color=False)
+                CLIP_score_col, _, _, _, image_col = forward(lat_rep, prompt, camera_params_opti_c, phong_params_opti_c, light_params_opti_c, color=True)
                 writer.add_image(f'rendered image of {prompt}', image_no_col.detach().numpy(), iteration, dataformats='HWC')
                 writer.add_image(f'textured rendered image of {prompt}', image_col.detach().numpy(), iteration, dataformats='HWC')
+                writer.add_scalar('CLIP Score no color', CLIP_score_no_col, iteration)
+                writer.add_scalar('CLIP Score color', CLIP_score_col, iteration)
         
         if CLIP_gt != None:
             CLIP_gt_similarity, CLIP_delta_sim = CLIP_similarity(image_no_col, CLIP_gt, mean_image)
