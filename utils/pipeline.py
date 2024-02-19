@@ -527,8 +527,8 @@ def batch_forward(lat_rep_orig, prompt, hparams):
 # Optimal Params for rendering with color
 def get_optimal_params_color(hparams):
     camera_params = {
-            "camera_distance": 0.34 * 2.57,
-            "camera_angle_rho": 45.,
+            "camera_distance": 0.21 * 2.57,
+            "camera_angle_rho": 15., #45.,
             "camera_angle_theta": 0.,
             "focal_length": 2.57,
             "max_ray_length": 3,
@@ -552,7 +552,7 @@ def get_optimal_params_color(hparams):
             # light 1
             "light_intensity_1": 1.69,
             "light_color_1": torch.tensor([1., 0.91, 0.88]),
-            "light_dir_1": torch.tensor([-0.85, -0.18, -0.8]),
+            "light_dir_1": torch.tensor([0, -0.18, -0.8]),
             # light p
             "light_intensity_p": 0.52,
             "light_color_p": torch.tensor([1., 0.91, 0.88]),
@@ -637,7 +637,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     
     optimizer = Adam(params=opt_params,
                     lr=hparams['optimizer_lr'],
-                    betas=(0.9, 0.999),
+                    betas=(hparams['optimizer_beta1'], 0.999),
                     weight_decay=0,
                     maximize=True)
 
@@ -651,7 +651,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
     # Normal Mode
     now = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
-    writer = SummaryWriter(log_dir=f'../runs/a/train-time:{now}')
+    writer = SummaryWriter(log_dir=f'../runs/b/train-time:{now}')
 
     best_score = torch.tensor([-torch.inf]).cpu()
     best_clip_score = torch.tensor([-torch.inf]).cpu()
@@ -677,7 +677,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     for iteration in tqdm(range(hparams['n_iterations'])):
     #prof.step()
         
-        #lat_rep_old = lat_rep.detach().cpu()
+        lat_geo_old = lat_rep[0].detach().cpu()
         if hparams["mean_mode"] == "mean_embed":
             batch_CLIP_score, batch_log_prob_geo_score, batch_log_prob_exp_score, batch_log_prob_app_score = batch_forward_img_mean(lat_rep, prompt, hparams)
         elif hparams["mean_mode"] == "mean_clip":
@@ -702,15 +702,15 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         sys.stdout.flush()
 
         # --- Validation with CLIP / DINO Delta Score ---
-        #if (CLIP_gt != None) or (DINO_gt != None):
+        with torch.no_grad():
+            CLIP_score_no_col, _, _, _, image_no_col = forward(lat_rep, prompt, camera_params_opti, phong_params_opti, light_params_opti, color=False)
+            CLIP_score_col, _, _, _, image_col = forward(lat_rep, prompt, camera_params_opti_c, phong_params_opti_c, light_params_opti_c, color=True)
+            writer.add_scalar('CLIP Score no color', CLIP_score_no_col, iteration)
+            writer.add_scalar('CLIP Score color', CLIP_score_col, iteration)
         if (iteration == 0) or ((iteration+1) % 2 == 0):
-            with torch.no_grad():
-                CLIP_score_no_col, _, _, _, image_no_col = forward(lat_rep, prompt, camera_params_opti, phong_params_opti, light_params_opti, color=False)
-                CLIP_score_col, _, _, _, image_col = forward(lat_rep, prompt, camera_params_opti_c, phong_params_opti_c, light_params_opti_c, color=True)
-                writer.add_image(f'rendered image of {prompt}', image_no_col.detach().numpy(), iteration, dataformats='HWC')
-                writer.add_image(f'textured rendered image of {prompt}', image_col.detach().numpy(), iteration, dataformats='HWC')
-                writer.add_scalar('CLIP Score no color', CLIP_score_no_col, iteration)
-                writer.add_scalar('CLIP Score color', CLIP_score_col, iteration)
+            writer.add_image(f'rendered image of {prompt}', image_no_col.detach().numpy(), iteration, dataformats='HWC')
+            writer.add_image(f'textured rendered image of {prompt}', image_col.detach().numpy(), iteration, dataformats='HWC')
+            
         
         if CLIP_gt != None:
             CLIP_gt_similarity, CLIP_delta_sim = CLIP_similarity(image_no_col, CLIP_gt, mean_image)
@@ -745,14 +745,13 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         lr_scheduler.step(batch_score)
 
         # Difference between lat_rep and previous lat_rep
-        #lat_rep_diff = torch.abs(lat_rep.detach().cpu() - lat_rep_old) / lat_std.cpu()
-        #mean_diff = torch.mean(lat_rep_diff.abs())
-        #writer.add_scalar('Mean percentual diff wrt std dev', mean_diff, iteration)
+        lat_geo_diff = torch.abs(lat_rep[0].detach().cpu() - lat_geo_old) / geo_std.cpu()
+        mean_diff = torch.mean(lat_geo_diff.abs())
+        writer.add_scalar('Mean percentual diff wrt std dev', mean_diff, iteration)
 
         optimizer.zero_grad()          
 
     #prof.stop()
-    #lat_rep_end = lat_rep.detach()
 
     writer.add_hparams(hparams, {
         'Best score': best_score,
