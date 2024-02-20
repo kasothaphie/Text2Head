@@ -597,6 +597,32 @@ def get_optimal_params(hparams):
     
     return camera_params, phong_params, light_params
 
+def initial_latent_sampling(prompt, _vars, hparams, n_samples=5):
+    best_clip = -torch.inf
+    best_latents = None
+    for i in range(n_samples):
+        if 'geo' in _vars:
+            lat_geo = torch.randn_like(geo_std) * geo_std * 0.85 + geo_mean
+        else:
+            lat_geo = geo_mean
+        if 'exp' in _vars:
+            lat_exp = torch.randn_like(exp_std) * exp_std * 0.85 + exp_mean
+        else:
+            lat_exp = exp_mean
+        if 'app' in _vars:
+            lat_app = torch.randn_like(app_std) * app_std * 0.85 + app_mean
+        else:
+            lat_app = app_mean
+            
+        clip_score = forward([lat_geo, lat_exp, lat_app], prompt, *get_optimal_params_color(hparams), True)[0]
+        print(f"Sample {i}: {clip_score}")
+        if clip_score > best_clip:
+            best_latents = [lat_geo, lat_exp, lat_app]
+            best_clip = clip_score
+            
+    print(f"Best Latent has {best_clip}")
+    return best_latents
+
 
 def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=None):
 
@@ -608,9 +634,10 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     print('###########################')
 
     if init_lat is None:
-        init_geo = torch.randn_like(geo_std) * geo_std * 0.85 + geo_mean
-        init_exp = torch.randn_like(exp_std) * exp_std * 0.85 + exp_mean
-        init_app = torch.randn_like(app_std) * app_std * 0.85 + app_mean
+        best_sampled_latents = initial_latent_sampling(prompt, opt_vars, hparams)
+        init_geo = best_sampled_latents[0]
+        init_exp = best_sampled_latents[1]
+        init_app = best_sampled_latents[2]
     else:
         init_geo = init_lat[0]
         init_exp = init_lat[1]
@@ -651,7 +678,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
     # Normal Mode
     now = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
-    writer = SummaryWriter(log_dir=f'../runs/d/train-time:{now}')
+    writer = SummaryWriter(log_dir=f'../runs/{hparams["exp_name"]}/train-time:{now}')
 
     best_score = torch.tensor([-torch.inf]).cpu()
     best_clip_score = torch.tensor([-torch.inf]).cpu()
