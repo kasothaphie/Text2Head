@@ -651,7 +651,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
     # Normal Mode
     now = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
-    writer = SummaryWriter(log_dir=f'../runs/b/train-time:{now}')
+    writer = SummaryWriter(log_dir=f'../runs/d/train-time:{now}')
 
     best_score = torch.tensor([-torch.inf]).cpu()
     best_clip_score = torch.tensor([-torch.inf]).cpu()
@@ -678,6 +678,8 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     #prof.step()
         
         lat_geo_old = lat_rep[0].detach().cpu()
+        lat_exp_old = lat_rep[1].detach().cpu()
+
         if hparams["mean_mode"] == "mean_embed":
             batch_CLIP_score, batch_log_prob_geo_score, batch_log_prob_exp_score, batch_log_prob_app_score = batch_forward_img_mean(lat_rep, prompt, hparams)
         elif hparams["mean_mode"] == "mean_clip":
@@ -734,9 +736,17 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             lat_geo.grad = lat_geo.grad.nan_to_num(0.) # TODO: is this still needed?
             gradient_lat_geo = lat_geo.grad
             writer.add_scalar('Gradient norm of Score w.r.t. Geometry Latent', gradient_lat_geo.norm(), iteration)
+            
+            # Difference between lat_rep and previous lat_rep
+            lat_geo_new = lat_rep[0].detach().cpu()
+            lat_geo_diff = torch.abs(lat_geo_new - lat_geo_old) / geo_std.cpu()
+            mean_diff = torch.mean(lat_geo_diff.abs())
+            writer.add_scalar('Mean percentual diff geo wrt std dev', mean_diff, iteration)
+
         if 'exp' in opt_vars:
             gradient_lat_exp = lat_exp.grad
             writer.add_scalar('Gradient norm of Score w.r.t. Expression Latent', gradient_lat_exp.norm(), iteration)
+
         if 'app' in opt_vars:
             gradient_lat_app = lat_app.grad
             writer.add_scalar('Gradient norm of Score w.r.t. Appearance Latent', gradient_lat_app.norm(), iteration)
@@ -744,10 +754,42 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         optimizer.step()
         lr_scheduler.step(batch_score)
 
-        # Difference between lat_rep and previous lat_rep
-        lat_geo_diff = torch.abs(lat_rep[0].detach().cpu() - lat_geo_old) / geo_std.cpu()
-        mean_diff = torch.mean(lat_geo_diff.abs())
-        writer.add_scalar('Mean percentual diff wrt std dev', mean_diff, iteration)
+        if 'geo' in opt_vars:
+            # Difference between lat_rep and previous lat_rep
+            lat_geo_new = lat_rep[0].detach().cpu()
+            lat_geo_diff = torch.abs(lat_geo_new - lat_geo_old) / geo_std.cpu()
+            mean_diff = torch.mean(lat_geo_diff.abs())
+            writer.add_scalar('Mean percentual diff geo wrt std dev', mean_diff, iteration)
+
+            # Angle between lat_rep and previous lat_rep
+            lat_geo_new = lat_geo_new.squeeze(0).squeeze(0)
+            lat_geo_old = lat_geo_old.squeeze(0).squeeze(0)
+            normalized_lat_geo_new = lat_geo_new / lat_geo_new.norm(dim=-1, keepdim=True)
+            normalized_lat_geo_old = lat_geo_old / lat_geo_old.norm(dim=-1, keepdim=True)
+            cos_theta = torch.dot(normalized_lat_geo_new, normalized_lat_geo_old)
+            cos_theta = torch.clamp(cos_theta, -1.0, 1.0)
+            angle_rad = torch.acos(cos_theta)
+            angle_deg = torch.rad2deg(angle_rad)
+            writer.add_scalar('Angle between lat reps geo', angle_deg, iteration)
+
+        if 'exp' in opt_vars:
+            # Difference between lat_rep and previous lat_rep
+            lat_exp_new = lat_rep[1].detach().cpu()
+            lat_exp_diff = torch.abs(lat_exp_new - lat_exp_old) / exp_std.cpu()
+            mean_diff = torch.mean(lat_exp_diff.abs())
+            writer.add_scalar('Mean percentual diff exp wrt std dev', mean_diff, iteration)
+
+            # Angle between lat_rep and previous lat_rep
+            lat_exp_new = lat_exp_new.squeeze(0).squeeze(0)
+            lat_exp_old = lat_exp_old.squeeze(0).squeeze(0)
+            normalized_lat_exp_new = lat_exp_new / lat_exp_new.norm(dim=-1, keepdim=True)
+            normalized_lat_exp_old = lat_exp_old / lat_exp_old.norm(dim=-1, keepdim=True)
+            cos_theta = torch.dot(normalized_lat_exp_new, normalized_lat_exp_old)
+            cos_theta = torch.clamp(cos_theta, -1.0, 1.0)
+            angle_rad = torch.acos(cos_theta)
+            angle_deg = torch.rad2deg(angle_rad)
+            writer.add_scalar('Angle between lat reps exp', angle_deg, iteration)
+
 
         optimizer.zero_grad()          
 
