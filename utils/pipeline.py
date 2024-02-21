@@ -651,7 +651,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
     # Normal Mode
     now = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
-    writer = SummaryWriter(log_dir=f'../runs/d/train-time:{now}')
+    writer = SummaryWriter(log_dir=f'../runs/a/train-time:{now}')
 
     best_score = torch.tensor([-torch.inf]).cpu()
     best_clip_score = torch.tensor([-torch.inf]).cpu()
@@ -673,12 +673,16 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         lat_app if 'app' in opt_vars else app_mean,
     ]
     
+    step_geo = torch.zeros(geo_mean.shape)
+    step_exp = torch.zeros(exp_mean.shape)
     #prof.start()
     for iteration in tqdm(range(hparams['n_iterations'])):
     #prof.step()
         
         lat_geo_old = lat_rep[0].detach().cpu()
         lat_exp_old = lat_rep[1].detach().cpu()
+        prev_step_geo = step_geo
+        prev_step_exp = step_exp
 
         if hparams["mean_mode"] == "mean_embed":
             batch_CLIP_score, batch_log_prob_geo_score, batch_log_prob_exp_score, batch_log_prob_app_score = batch_forward_img_mean(lat_rep, prompt, hparams)
@@ -745,6 +749,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
         if 'exp' in opt_vars:
             gradient_lat_exp = lat_exp.grad
+            lat_exp.grad *= hparams['optimizer_lr_exp']/hparams['optimizer_lr']
             writer.add_scalar('Gradient norm of Score w.r.t. Expression Latent', gradient_lat_exp.norm(), iteration)
 
         if 'app' in opt_vars:
@@ -761,16 +766,15 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             mean_diff = torch.mean(lat_geo_diff.abs())
             writer.add_scalar('Mean percentual diff geo wrt std dev', mean_diff, iteration)
 
-            # Angle between lat_rep and previous lat_rep
-            lat_geo_new = lat_geo_new.squeeze(0).squeeze(0)
-            lat_geo_old = lat_geo_old.squeeze(0).squeeze(0)
-            normalized_lat_geo_new = lat_geo_new / lat_geo_new.norm(dim=-1, keepdim=True)
-            normalized_lat_geo_old = lat_geo_old / lat_geo_old.norm(dim=-1, keepdim=True)
-            cos_theta = torch.dot(normalized_lat_geo_new, normalized_lat_geo_old)
+            # Angle between step and previous step
+            step_geo = lat_geo_new.squeeze(0).squeeze(0) - lat_geo_old.squeeze(0).squeeze(0)
+            normalized_step_geo = step_geo / step_geo.norm(dim=-1, keepdim=True)
+            normalized_prev_step_geo = prev_step_geo / prev_step_geo.norm(dim=-1, keepdim=True)
+            cos_theta = torch.dot(normalized_step_geo, normalized_prev_step_geo)
             cos_theta = torch.clamp(cos_theta, -1.0, 1.0)
             angle_rad = torch.acos(cos_theta)
             angle_deg = torch.rad2deg(angle_rad)
-            writer.add_scalar('Angle between lat reps geo', angle_deg, iteration)
+            writer.add_scalar('Angle between steps geo', angle_deg, iteration)
 
         if 'exp' in opt_vars:
             # Difference between lat_rep and previous lat_rep
@@ -780,15 +784,14 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             writer.add_scalar('Mean percentual diff exp wrt std dev', mean_diff, iteration)
 
             # Angle between lat_rep and previous lat_rep
-            lat_exp_new = lat_exp_new.squeeze(0).squeeze(0)
-            lat_exp_old = lat_exp_old.squeeze(0).squeeze(0)
-            normalized_lat_exp_new = lat_exp_new / lat_exp_new.norm(dim=-1, keepdim=True)
-            normalized_lat_exp_old = lat_exp_old / lat_exp_old.norm(dim=-1, keepdim=True)
-            cos_theta = torch.dot(normalized_lat_exp_new, normalized_lat_exp_old)
+            step_exp = lat_exp_new.squeeze(0).squeeze(0) - lat_exp_old.squeeze(0).squeeze(0)
+            normalized_step_exp = step_exp / step_exp.norm(dim=-1, keepdim=True)
+            normalized_prev_step_exp = prev_step_exp / prev_step_exp.norm(dim=-1, keepdim=True)
+            cos_theta = torch.dot(normalized_step_exp, normalized_prev_step_exp)
             cos_theta = torch.clamp(cos_theta, -1.0, 1.0)
             angle_rad = torch.acos(cos_theta)
             angle_deg = torch.rad2deg(angle_rad)
-            writer.add_scalar('Angle between lat reps exp', angle_deg, iteration)
+            writer.add_scalar('Angle between steps exp', angle_deg, iteration)
 
 
         optimizer.zero_grad()          
