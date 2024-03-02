@@ -13,12 +13,9 @@ def phong_model(sdf, points, camera_position, phong_params, light_params, model_
     else:
         with torch.no_grad():
             colors = estimate_colors(sdf, points)
-            
-    if 'geo' in model_grads:
-        normals = estimate_normals(sdf, points)
-    else:
-        with torch.no_grad():
-            normals = estimate_normals(sdf, points)
+    
+    normals = estimate_normals(sdf, points)
+    
     view_dirs = points - camera_position
     light_dir_1 = light_params["light_dir_1"].repeat(points.shape[0], 1)
     light_dir_p = points - light_params["light_pos_p"].repeat(points.shape[0], 1)
