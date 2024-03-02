@@ -6,9 +6,9 @@ from torch.utils.checkpoint import checkpoint
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-def phong_model(sdf, points, camera_position, phong_params, light_params, model_grads=[]):
+def phong_model(sdf, points, camera_position, phong_params, light_params, with_app_grad):
 
-    if 'app' in model_grads:
+    if with_app_grad:
         colors = estimate_colors(sdf, points)
     else:
         with torch.no_grad():
@@ -192,7 +192,7 @@ def rotate(camera_params, camera_position_in, directions_in):
     return directions, camera_position
 
 
-def render(model, lat_rep, camera_params, phong_params, light_params, color=True, mesh_path=None, model_grads=[]):
+def render(model, lat_rep, camera_params, phong_params, light_params, color=True, mesh_path=None, with_app_grad=False):
 
     def sdf(positions, chunk_size=10000):
     
@@ -266,7 +266,7 @@ def render(model, lat_rep, camera_params, phong_params, light_params, color=True
             no_gradient_mask = ~gradient_mask
 
             no_gradient_reflections, no_gradient_colors = phong_model(sdf, phong_points[no_gradient_mask, :], camera_position, phong_params, light_params)
-        gradient_reflections, gradient_colors = phong_model(sdf, phong_points[gradient_mask, :], camera_position, phong_params, light_params, model_grads=model_grads)
+        gradient_reflections, gradient_colors = phong_model(sdf, phong_points[gradient_mask, :], camera_position, phong_params, light_params, with_app_grad=with_app_grad)
         reflections = torch.zeros_like(phong_points).float() 
         colors = torch.zeros_like(phong_points).float()
         reflections[gradient_mask] = gradient_reflections
@@ -274,7 +274,7 @@ def render(model, lat_rep, camera_params, phong_params, light_params, color=True
         colors[gradient_mask] = gradient_colors
         colors[no_gradient_mask] = no_gradient_colors
     else:
-        reflections, colors = phong_model(sdf, phong_points, camera_position, phong_params, light_params, model_grads=model_grads)
+        reflections, colors = phong_model(sdf, phong_points, camera_position, phong_params, light_params, with_app_grad=with_app_grad)
         
 
     # Assign a color for objects

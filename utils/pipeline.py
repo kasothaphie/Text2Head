@@ -29,7 +29,7 @@ from utils.EMA import EMA
 device = "cuda" if torch.cuda.is_available() else "cpu"
 mode = "mono_nphm" # nphm, else mono_nphm
 # --- Specify what you want to optimize! ---
-opt_vars = ['geo'] # add 'exp' and/or 'app' (['geo', 'exp', 'app'])
+opt_vars = ['geo', 'app'] # add 'exp' and/or 'app' (['geo', 'exp', 'app'])
 grad_vars = ['geo'] # you can only skip exp and app
 
 CLIP_model, CLIP_preprocess = clip.load("ViT-B/32", device="cpu")
@@ -164,8 +164,8 @@ def loss_fn(clip_score, prob_geo_score, prob_exp_score, prob_app_score, hparams)
 
     return loss
 
-def get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params, color):
-    image = render(sdf, lat_rep, camera_params, phong_params, light_params, color, model_grads=grad_vars)
+def get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params, with_app_grad, color):
+    image = render(sdf, lat_rep, camera_params, phong_params, light_params, color, with_app_grad=with_app_grad)
     image_c_first = image.permute(2, 0, 1)
     image_preprocessed = clip_tensor_preprocessor(image_c_first).unsqueeze(0).cpu()
     CLIP_embedding_image = CLIP_model.encode_image(image_preprocessed) # [1, 512]
@@ -239,9 +239,9 @@ def latent_norms(lat_rep):
     
     return prob_geo, prob_exp, prob_app
 
-def forward(lat_rep, prompt, camera_params, phong_params, light_params, color):
+def forward(lat_rep, prompt, camera_params, phong_params, light_params, with_app_grad, color):
     # --- Render Image from current Lat Rep + Embedd ---
-    image_embedding, image = get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params, color)
+    image_embedding, image = get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params, with_app_grad, color)
     # for debugging
     #plt.imshow(image.detach().numpy())
     #plt.axis('off')  # Turn off axes
@@ -435,40 +435,9 @@ def get_augmented_params_no_color(lat_rep, hparams):
     }
 
     return lat_rep_aug, camera_params_aug, phong_params_aug, light_params_aug
-    
-    
-def batch_forward_img_mean(lat_rep_orig, prompt, hparams):
-    image_embeddings = []
-    for i in range(hparams['batch_size']):
-        if torch.rand(1) <= hparams['color_prob']:
-            # --- Random Augmentation ---
-            lat_rep, camera_params, phong_params, light_params = get_augmented_params_color(lat_rep_orig, hparams)
-            # --- Forward Pass ---
-            image_embedding, _ = get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params, color=True)
-        else:
-            # --- Random Augmentation ---
-            lat_rep, camera_params, phong_params, light_params = get_augmented_params_no_color(lat_rep_orig, hparams)
-            # --- Forward Pass ---
-            image_embedding, _ = get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params, color=False)
-        
-        image_embeddings.append(image_embedding)
-        
-    mean_embedding = torch.concat(image_embeddings, axis=0).mean(axis=0, keepdim=True)
-    
-    # --- Text Embedding ---
-    text_embedded_normalized = get_text_clip_embedding(prompt)
-    
-    # --- Delta CLIP Score ---
-    delta_CLIP_score = clip_score(mean_embedding, text_embedded_normalized)
-    
-    # --- Log Prob Score ---
-    norm_geo, norm_exp, norm_app = latent_norms(lat_rep)
-    
-    return delta_CLIP_score, norm_geo, norm_exp, norm_app
-        
         
 
-def batch_forward(lat_rep_orig, prompt, hparams):
+def batch_forward(lat_rep_orig, prompt, hparams, with_app_grad):
     all_delta_CLIP_scores = []
     
     for i in range(hparams['batch_size']):
@@ -477,12 +446,12 @@ def batch_forward(lat_rep_orig, prompt, hparams):
             # --- Random Augmentation ---
             lat_rep, camera_params, phong_params, light_params = get_augmented_params_color(lat_rep_orig, hparams)
             # --- Forward Pass ---
-            delta_CLIP_score, _, _, _, _ = forward(lat_rep, prompt, camera_params, phong_params, light_params, color=True)
+            delta_CLIP_score, _, _, _, _ = forward(lat_rep, prompt, camera_params, phong_params, light_params, with_app_grad, color=True)
         else:
             # --- Random Augmentation ---
             lat_rep, camera_params, phong_params, light_params = get_augmented_params_no_color(lat_rep_orig, hparams)
             # --- Forward Pass ---
-            delta_CLIP_score, _, _, _, _ = forward(lat_rep, prompt, camera_params, phong_params, light_params, color=False)
+            delta_CLIP_score, _, _, _, _ = forward(lat_rep, prompt, camera_params, phong_params, light_params, with_app_grad, color=False)
 
         
         # --- Compute Scores ---
@@ -587,7 +556,7 @@ def initial_latent_sampling(prompt, _vars, hparams, n_samples=5):
             lat_app = app_mean
             
         with torch.no_grad():
-            clip_score = forward([lat_geo, lat_exp, lat_app], prompt, *get_optimal_params_color(hparams), True)[0]
+            clip_score = forward([lat_geo, lat_exp, lat_app], prompt, *get_optimal_params_color(hparams), with_app_grad=False, color=True)[0]
         print(f"Sample {i}: {clip_score}")
         if clip_score > best_clip:
             best_latents = [lat_geo, lat_exp, lat_app]
@@ -632,21 +601,36 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     opt_params = list(filter(lambda x: x is not None,[
         lat_geo if 'geo' in opt_vars else None,
         lat_exp if 'exp' in opt_vars else None,
-        lat_app if 'app' in opt_vars else None,
+        #lat_app if 'app' in opt_vars else None,
     ]))
     
-    optimizer = torch.optim.AdamW(params=opt_params,
+    optimizer_geo_exp = torch.optim.AdamW(params=opt_params,
                     lr=hparams['optimizer_lr'],
                     betas=(hparams['optimizer_beta1'], 0.999),
                     weight_decay=hparams['lambda'],
                     maximize=True)
-
+    
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
+        optimizer_geo_exp,
         mode='max',
         factor=hparams['lr_scheduler_factor'],
         patience=hparams['lr_scheduler_patience'],
         min_lr=hparams['lr_scheduler_min_lr']
+    )
+    
+    if 'app' in opt_vars:
+        optimizer_app = torch.optim.AdamW(params=[lat_app],
+                                          lr=hparams['optimizer_lr'],
+                                          betas=(hparams['optimizer_beta1'], 0.999),
+                                          weight_decay=hparams['lambda'],
+                                          maximize=True)
+        
+        lr_scheduler_app = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer_app,
+            mode='max',
+            factor=hparams['lr_scheduler_factor'],
+            patience=hparams['lr_scheduler_patience'],
+            min_lr=hparams['lr_scheduler_min_lr']
     )
 
     # Normal Mode
@@ -656,7 +640,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     best_score = torch.tensor([-torch.inf]).cpu()
     best_clip_score = torch.tensor([-torch.inf]).cpu()
     torch.cuda.empty_cache()
-    optimizer.zero_grad()
+    optimizer_geo_exp.zero_grad()
     
     #prof = profile(
         #schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
@@ -687,16 +671,20 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         prev_step_geo = step_geo
         prev_step_exp = step_exp
         prev_step_app = step_app
+        
+        if 'app' in opt_vars:
+            lat_rep_aug, camera_params_aug, phong_params_aug, light_params_aug = get_augmented_params_color(lat_rep, hparams)
+            CLIP_score_app, _, _, _, _ = forward(lat_rep_aug, prompt, camera_params_aug, phong_params_aug, light_params_aug, with_app_grad=True, color=True)
+            optimizer_app.zero_grad()
+            CLIP_score_app.backward()
+            optimizer_app.step()
+            lr_scheduler_app.step(CLIP_score_app)
 
-        if hparams["mean_mode"] == "mean_embed":
-            batch_CLIP_score, norm_geo, norm_exp, norm_app = batch_forward_img_mean(lat_rep, prompt, hparams)
-        elif hparams["mean_mode"] == "mean_clip":
-            batch_CLIP_score, norm_geo, norm_exp, norm_app = batch_forward(lat_rep, prompt, hparams)
-        else:
-            raise ValueError(f"unknown mode: {mode}")
+        batch_CLIP_score, norm_geo, norm_exp, norm_app = batch_forward(lat_rep, prompt, hparams, with_app_grad=False)
 
         #batch_score = loss_fn(torch.clone(batch_CLIP_score), batch_log_prob_geo_score, batch_log_prob_exp_score, batch_log_prob_app_score, hparams)
         batch_score = torch.clone(batch_CLIP_score)
+        
 
         if batch_score > best_score:
             best_score = batch_score.detach().cpu()
@@ -708,14 +696,15 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             best_clip_score = batch_CLIP_score.detach().cpu()
             #best_clip_latent = torch.clone(lat_rep).cpu()
 
-        optimizer.zero_grad() 
+        optimizer_geo_exp.zero_grad() 
         batch_score.backward()
         sys.stdout.flush()
+        
 
         # --- Validation with CLIP / DINO Delta Score ---
         with torch.no_grad():
-            CLIP_score_no_col, _, _, _, image_no_col = forward(lat_rep, prompt, camera_params_opti, phong_params_opti, light_params_opti, color=False)
-            CLIP_score_col, _, _, _, image_col = forward(lat_rep, prompt, camera_params_opti_c, phong_params_opti_c, light_params_opti_c, color=True)
+            CLIP_score_no_col, _, _, _, image_no_col = forward(lat_rep, prompt, camera_params_opti, phong_params_opti, light_params_opti, with_app_grad=False, color=False)
+            CLIP_score_col, _, _, _, image_col = forward(lat_rep, prompt, camera_params_opti_c, phong_params_opti_c, light_params_opti_c, with_app_grad=False, color=True)
             writer.add_scalar('CLIP Score no color', CLIP_score_no_col, iteration)
             writer.add_scalar('CLIP Score color', CLIP_score_col, iteration)
         if (iteration == 0) or ((iteration+1) % 2 == 0):
@@ -739,7 +728,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         writer.add_scalar('Norm Geometry Code', norm_geo, iteration)
         writer.add_scalar('Norm Expression Code', norm_exp, iteration)
         writer.add_scalar('Norm Appearance Code', norm_app, iteration)
-        writer.add_scalar('learning rate', optimizer.param_groups[0]['lr'], iteration)
+        writer.add_scalar('learning rate', optimizer_geo_exp.param_groups[0]['lr'], iteration)
         if 'geo' in opt_vars:
             lat_geo.grad = lat_geo.grad.nan_to_num(0.) # TODO: is this still needed?
             gradient_lat_geo = lat_geo.grad
@@ -797,7 +786,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             writer.add_histogram('Appearence Latent Code in normalized space', lat_app.detach().cpu(), iteration)
         
         
-        optimizer.step()
+        optimizer_geo_exp.step()
         lr_scheduler.step(batch_score)
         
 
@@ -836,7 +825,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             writer.add_scalar('Angle between steps exp', angle_deg, iteration)
 
 
-        optimizer.zero_grad()          
+        optimizer_geo_exp.zero_grad()          
 
     #prof.stop()
 
