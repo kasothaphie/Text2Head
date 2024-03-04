@@ -18,6 +18,7 @@ from tqdm import tqdm
 
 from nphm_tum import env_paths as mono_env_paths
 from nphm_tum.models.neural3dmm import construct_n3dmm, load_checkpoint
+from nphm_tum.models.canonical_space import get_id_model
 
 from torch.profiler import profile, record_function, ProfilerActivity
 
@@ -27,100 +28,70 @@ from utils.EMA import EMA
 
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-mode = "mono_nphm" # nphm, else mono_nphm
+
 # --- Specify what you want to optimize! ---
 opt_vars = ['geo', 'app'] # add 'exp' and/or 'app' (['geo', 'exp', 'app'])
 grad_vars = ['geo'] # you can only skip exp and app
 
 CLIP_model, CLIP_preprocess = clip.load("ViT-B/32", device="cpu")
-#SigLIPmodel = open_clip.create_model("ViT-B-16-SigLIP", pretrained='webli', device="cpu")
-#tokenizer = open_clip.get_tokenizer('ViT-B-16-SigLIP')
 
-# TODO: Can we remove 'nphm' mode?
-if mode == "nphm":
-    with open('../NPHM/scripts/configs/fitting_nphm.yaml', 'r') as f:
-        CFG = yaml.safe_load(f)
-        
-    weight_dir_shape = env_paths.EXPERIMENT_DIR + '/{}/'.format(CFG['exp_name_shape'])
-    fname_shape = weight_dir_shape + 'configs.yaml'
-    with open(fname_shape, 'r') as f:
-        CFG_shape = yaml.safe_load(f)
-        
-
-    lm_inds = np.load(env_paths.ANCHOR_INDICES_PATH)
-    anchors = torch.from_numpy(np.load(env_paths.ANCHOR_MEAN_PATH)).float().unsqueeze(0).unsqueeze(0).to(device)
-
-    decoder_shape = FastEnsembleDeepSDFMirrored(
-            lat_dim_glob=CFG_shape['decoder']['decoder_lat_dim_glob'],
-            lat_dim_loc=CFG_shape['decoder']['decoder_lat_dim_loc'],
-            hidden_dim=CFG_shape['decoder']['decoder_hidden_dim'],
-            n_loc=CFG_shape['decoder']['decoder_nloc'],
-            n_symm_pairs=CFG_shape['decoder']['decoder_nsymm_pairs'],
-            anchors=anchors,
-            n_layers=CFG_shape['decoder']['decoder_nlayers'],
-            pos_mlp_dim=CFG_shape['decoder'].get('pos_mlp_dim', 256),
-        )
-
-    decoder_shape = decoder_shape.to(device)
-
-    path = osp.join(weight_dir_shape, 'checkpoints/checkpoint_epoch_{}.tar'.format(CFG['checkpoint_shape']))
-    model_checkpoint = torch.load(path, map_location=device)
-    decoder_shape.load_state_dict(model_checkpoint['decoder_state_dict'], strict=True)
     
-    def sdf(sdf_inputs, lat_rep):
-        lat_rep_in = torch.reshape(lat_rep[0], (1, 1, -1))
-        return decoder_shape(sdf_inputs, lat_rep_in, None)[0]
+weight_dir_shape = mono_env_paths.EXPERIMENT_DIR_REMOTE + '/'
+fname_shape = weight_dir_shape + 'configs.yaml'
+with open(fname_shape, 'r') as f:
+    CFG = yaml.safe_load(f)
+
+# load participant IDs that were used for training
+fname_subject_index = f"{weight_dir_shape}/subject_train_index.json"
+with open(fname_subject_index, 'r') as f:
+    subject_index = json.load(f)
+
+# load expression indices that were used for training
+fname_subject_index = f"{weight_dir_shape}/expression_train_index.json"
+with open(fname_subject_index, 'r') as f:
+    expression_index = json.load(f)
+
+
+device = torch.device("cuda")
+modalities = ['geo', 'exp', 'app']
+n_lats = [len(subject_index), len(expression_index), len(subject_index)]
+
+neural_3dmm, latent_codes = construct_n3dmm(
+    cfg=CFG,
+    modalities=modalities,
+    n_latents=n_lats,
+    device=device,
+    neutral_only=False,
+    include_color_branch=True,
+    skip_exp_grads= ('exp' not in grad_vars)
+)
+
+# load checkpoint from trained NPHM model, including the latent codes
+ckpt_path = osp.join(weight_dir_shape, 'checkpoints/checkpoint_epoch_2500.tar')
+load_checkpoint(ckpt_path, neural_3dmm, latent_codes)
     
-elif mode == "mono_nphm":
-    weight_dir_shape = mono_env_paths.EXPERIMENT_DIR_REMOTE + '/'
-    fname_shape = weight_dir_shape + 'configs.yaml'
-    with open(fname_shape, 'r') as f:
-        CFG = yaml.safe_load(f)
+def sdf(sdf_inputs, lat_geo, lat_exp, lat_app):
+    dict_in = {
+        "queries":sdf_inputs
+    }
 
-    # load participant IDs that were used for training
-    fname_subject_index = f"{weight_dir_shape}/subject_train_index.json"
-    with open(fname_subject_index, 'r') as f:
-        subject_index = json.load(f)
+    cond = {
+        "geo": torch.reshape(lat_geo * geo_std, (1, 1, -1)),
+        "exp": torch.reshape(lat_exp * exp_std, (1, 1, -1)),
+        "app": torch.reshape(lat_app * app_std, (1, 1, -1))
+    }
+    dict_out = neural_3dmm(dict_in, cond)
+    return dict_out["sdf"], dict_out["color"]
 
-    # load expression indices that were used for training
-    fname_subject_index = f"{weight_dir_shape}/expression_train_index.json"
-    with open(fname_subject_index, 'r') as f:
-        expression_index = json.load(f)
+# For Debugging: View Anchors
+cfg = CFG
+include_color_branch=True
+id_model, anchors = get_id_model(cfg['decoder'],
+                                    spatial_input_dim=3+cfg['decoder']['n_hyper'],
+                                    rank=device,
+                                    include_color_branch=include_color_branch)
+id_model = id_model.to(device)
 
-
-    device = torch.device("cuda")
-    modalities = ['geo', 'exp', 'app']
-    n_lats = [len(subject_index), len(expression_index), len(subject_index)]
-
-    neural_3dmm, latent_codes = construct_n3dmm(
-        cfg=CFG,
-        modalities=modalities,
-        n_latents=n_lats,
-        device=device,
-        neutral_only=False,
-        include_color_branch=True,
-        skip_exp_grads= ('exp' not in grad_vars)
-    )
-
-    # load checkpoint from trained NPHM model, including the latent codes
-    ckpt_path = osp.join(weight_dir_shape, 'checkpoints/checkpoint_epoch_2500.tar')
-    load_checkpoint(ckpt_path, neural_3dmm, latent_codes)
-        
-    def sdf(sdf_inputs, lat_geo, lat_exp, lat_app):
-        dict_in = {
-            "queries":sdf_inputs
-        }
-
-        cond = {
-            "geo": torch.reshape(lat_geo * geo_std, (1, 1, -1)),
-            "exp": torch.reshape(lat_exp * exp_std, (1, 1, -1)),
-            "app": torch.reshape(lat_app * app_std, (1, 1, -1))
-        }
-        dict_out = neural_3dmm(dict_in, cond)
-        return dict_out["sdf"], dict_out["color"]
-
-else:
-    raise ValueError(f"unknown mode: {mode}")
 
 #from clip preprocessing
 clip_tensor_preprocessor = Compose([
@@ -129,38 +100,77 @@ clip_tensor_preprocessor = Compose([
     Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
 ])
 
-if mode == "nphm":
-    lat_mean = torch.from_numpy(np.load(env_paths.ASSETS + 'nphm_lat_mean.npy'))
-    lat_std = torch.from_numpy(np.load(env_paths.ASSETS + 'nphm_lat_std.npy'))
-elif mode == "mono_nphm":
-    geo_mean = latent_codes.codebook['geo'].embedding.weight.mean(dim=0).detach()
-    geo_std = latent_codes.codebook['geo'].embedding.weight.std(dim=0).detach()
-    exp_mean = latent_codes.codebook['exp'].embedding.weight.mean(dim=0).detach()
-    exp_std = latent_codes.codebook['exp'].embedding.weight.std(dim=0).detach()
-    app_mean = latent_codes.codebook['app'].embedding.weight.mean(dim=0).detach()
-    app_std = latent_codes.codebook['app'].embedding.weight.std(dim=0).detach()
-else:
-    raise ValueError(f"unknown mode: {mode}")
+geo_mean = latent_codes.codebook['geo'].embedding.weight.mean(dim=0).detach()
+geo_std = latent_codes.codebook['geo'].embedding.weight.std(dim=0).detach()
+exp_mean = latent_codes.codebook['exp'].embedding.weight.mean(dim=0).detach()
+exp_std = latent_codes.codebook['exp'].embedding.weight.std(dim=0).detach()
+app_mean = latent_codes.codebook['app'].embedding.weight.mean(dim=0).detach()
+app_std = latent_codes.codebook['app'].embedding.weight.std(dim=0).detach()
 
-def loss_fn(clip_score, prob_geo_score, prob_exp_score, prob_app_score, hparams):
+
+def get_debugging_details(lat_rep_geo):
+    anchors = id_model.get_anchors(torch.reshape(lat_rep_geo*geo_std, (1, 1, -1))).cpu().detach()
+    anchors = torch.reshape(anchors, (-1, 3)) # [65, 3]
+    lat_rep_geo = torch.reshape(lat_rep_geo, (-1,)).cpu().detach() # [2176]
+
+    geo_glob = lat_rep_geo[:64] # [64]
+    geo_all_local = lat_rep_geo[64:] #[2112]
+    geo_all_local = torch.reshape(geo_all_local, (-1, 32)) # [66, 32]
+
+    print('global')
+    print('std: ', geo_glob.std())
+
+    print('local')
+    stds = geo_all_local.std(dim=-1)
+    x_values = range(len(stds))
+    plt.bar(x_values, stds)
+    plt.show()
+    '''
+    print('anchor 0')
+    a_0 = geo_all_local[-1]
+    print('mean: ', a_0.mean())
+    print('std: ', a_0.std())
+    print('#######################')
+    
+    for i in range(5): #range(anchors.shape[0]):
+        print(f'anchor {i+1}')
+        current_anchor = anchors[i]
+        plt.scatter(anchors[:, 0], anchors[:, 1], c='b', label='All Points')
+        plt.scatter(current_anchor[0], current_anchor[1], c='r', label='Second Point')
+        plt.legend()
+        plt.show()
+
+        geo_local = geo_all_local[i]
+        print('mean: ', geo_local.mean())
+        print('std: ', geo_local.std())
+        print('#######################')
+        '''
+
+def get_std_score(lat_rep):
+    geo = lat_rep[0]
+    geo_glob = geo[:64]
+    geo_all_local = geo[64:] #[2112]
+    geo_all_local = torch.reshape(geo_all_local, (-1, 32)) # [66, 32]
+
+    std_glob = geo_glob.std()
+    std_local = geo_all_local.std(dim=-1)
+
+    all_std = torch.cat((std_glob.unsqueeze(0), std_local), dim=0)
+    mean_std = all_std.mean()
+    diff = (all_std - mean_std).abs().sum()
+    print('diff', diff)
+    return diff
+    
+
+def loss_fn(clip_score, geo_std_score, hparams):
     if 'geo' in opt_vars:
         lambda_geo = hparams["lambda_geo"]
     else:
         lambda_geo = 0
-    if 'exp' in opt_vars:
-        lambda_exp = hparams["lambda_exp"]
-    else:
-        lambda_exp = 0
-    if 'app' in opt_vars:
-        lambda_app = hparams["lambda_app"]
-    else:
-        lambda_app = 0
 
     loss = clip_score
-    #loss += lambda_geo * prob_geo_score
-    #loss += lambda_exp * prob_exp_score
-    #loss += lambda_app * prob_app_score
-    #loss /= 1 + lambda_geo + lambda_exp + lambda_app
+    loss -= lambda_geo * geo_std_score.cpu()
+    loss /= 1 + lambda_geo
 
     return loss
 
@@ -169,16 +179,13 @@ def get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params,
     image_c_first = image.permute(2, 0, 1)
     image_preprocessed = clip_tensor_preprocessor(image_c_first).unsqueeze(0).cpu()
     CLIP_embedding_image = CLIP_model.encode_image(image_preprocessed) # [1, 512]
-    #CLIP_embedding_image = SigLIPmodel.encode_image(image_preprocessed)
     normalized_CLIP_embedding_image = CLIP_embedding_image / CLIP_embedding_image.norm(dim=-1, keepdim=True)
     
     return normalized_CLIP_embedding_image, image
 
 def get_text_clip_embedding(prompt):
     prompt_tokenized = clip.tokenize(prompt).cpu()
-    #prompt_tokenized = tokenizer(prompt).cpu()
     text_embedded = CLIP_model.encode_text(prompt_tokenized)
-    #text_embedded = SigLIPmodel.encode_text(prompt_tokenized)
     normalized_CLIP_embedding_text = text_embedded / text_embedded.norm(dim=-1, keepdim=True)
     
     return normalized_CLIP_embedding_text
@@ -186,56 +193,12 @@ def get_text_clip_embedding(prompt):
 def clip_score(image_embedding, text_embedding):
     return 100 * torch.matmul(image_embedding, text_embedding.T)
 
-def std_factor_score(lat_rep):
-    distance = lat_rep.cpu() - lat_mean.cpu()
-    weighted_distance = distance / lat_std
-    distance_abs = weighted_distance.abs()
-    std_factor_score = distance_abs.mean()
-    return std_factor_score
-
-def penalty_score(lat_rep, a=0.065, b=2.5):
-    cov = lat_std * torch.eye(lat_mean.shape[0])
-    distance = lat_rep.cpu() - lat_mean.cpu()
-    weighted_distance = torch.inverse(cov.cpu()) @ distance
-    distance_abs = weighted_distance.abs()
-
-    penalized_tensor = -a * torch.exp(b * distance_abs)
-    penalty = penalized_tensor.mean()
-    return penalty
 
 def latent_norms(lat_rep):
-    
-    # --- Probability of latent geometry code ---
-    #geo_rep = torch.reshape(lat_rep[0], (-1,)) # [1344] 
-    #cov_geo = (1/(geo_std.cpu()**2)) * torch.eye(geo_mean.shape[0])
-    #delta_geo = geo_rep.cpu() - geo_mean.cpu() 
-    #prob_geo = -delta_geo.T @ cov_geo @ delta_geo
-    
-    #lat_geos = lat_rep[0].split([64, *([32] * 66)])
-    #geo_stds = geo_std.split([64, *([32] * 66)])
-    #lat_geo_prob_scores = torch.stack([torch.norm(sub_lat_geo) for sub_lat_geo in lat_geos])
-    #lat_geo_prob_scores[0] = lat_geo_prob_scores[0] * 10
-    #lat_std_means = torch.stack([torch.mean(sub_geo_std) for sub_geo_std in geo_stds])
-    #lat_std_means = lat_std_means / torch.max(lat_std_means)
-    #prob_geo = (lat_geo_prob_scores @ lat_std_means**2).cpu()
-    
-    #prob_geo = lat_geo_prob_scores[0].cpu() + lat_geo_prob_scores[1:].mean().cpu()
+
     prob_geo = -torch.norm(lat_rep[0]).cpu()
     prob_exp = -torch.norm(lat_rep[1]).cpu()
     prob_app = -torch.norm(lat_rep[2]).cpu()
-    
-    #prob_geo = -torch.norm(lat_rep[0] * torch.exp(geo_std / torch.max(geo_std))).cpu()
-    #prob_geo = -torch.norm(lat_rep[0] * (geo_std / torch.max(geo_std))).cpu()
-    # --- Probability of latent expression code ---
-    #exp_rep = torch.reshape(lat_rep[1], (-1,)) # [200] 
-    #cov_exp = torch.log(1/exp_std.cpu()) * torch.eye(exp_mean.shape[0])
-    #delta_exp = exp_rep.cpu() - exp_mean.cpu() 
-    #prob_exp = -delta_exp.T @ inv_exp_cov @ delta_exp
-    # --- Probability of latent expression code ---
-    #app_rep = torch.reshape(lat_rep[2], (-1,)) # [200] 
-    #cov_app = app_std.cpu() * torch.eye(app_mean.shape[0])
-    #delta_app = app_rep.cpu() - app_mean.cpu() 
-    #prob_app = -delta_app.T @ inv_app_cov @ delta_app
     
     return prob_geo, prob_exp, prob_app
 
@@ -271,7 +234,7 @@ def energy_level(lat_rep_1, lat_rep_2, prompt, hparams, steps=100):
 def get_augmented_latents(lat_rep, hparams):
     # --- Latent Representation Augmentation ---
     # Generate random values from a normal distribution with standard deviation alpha
-    # TODO: This shift is not used for now b/c no positive impact --> to be verified!
+
     lat_geo_aug = lat_rep[0] + torch.randn_like(lat_rep[0], device=lat_rep[0].device) * hparams["alpha"]
     
     if 'exp' in opt_vars:
@@ -288,8 +251,8 @@ def get_augmented_latents(lat_rep, hparams):
     return lat_rep_aug
 
 def get_augmented_params_color(lat_rep, hparams):
+    
     lat_rep_aug = get_augmented_latents(lat_rep, hparams)
-
 
     # --- Camera Parameters Augmentation ---
     camera_distance_factor = torch.randn(1).item() * 0.05 + 0.2 # originally: random value [0.2, 0.35]
@@ -305,8 +268,6 @@ def get_augmented_params_color(lat_rep, hparams):
         "resolution_y": hparams["resolution"],
         "resolution_x": hparams["resolution"]
     }
-    # TODO: test whether rendering parameter augmentation has a positive impact on optimization with color
-    #_, phong_params_aug, light_params_aug = get_optimal_params_color(hparams)
 
     # --- Phong Parameters Augmentation ---
     amb_coeff = torch.rand(1).item() * 0.28 + 0.1 #random value [0.1, 0.38]
@@ -377,9 +338,6 @@ def get_augmented_params_no_color(lat_rep, hparams):
         "resolution_y": hparams["resolution"],
         "resolution_x": hparams["resolution"]
     }
-
-    #_, phong_params_aug, light_params_aug = get_optimal_params(hparams)
-
 
     # --- Phong Parameters Augmentation ---
     amb_coeff = torch.rand(1).item() * 0.06 + 0.47 #random value [0.47, 0.53]
@@ -575,6 +533,10 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     print('Models considered for backpropagating gradients:', grad_vars)
     print('###########################')
 
+    app_params = hparams.copy()
+    app_params['color_prob'] = 1.
+    app_params['batch_size'] = 3
+
     if init_lat is None:
         best_sampled_latents = initial_latent_sampling(prompt, opt_vars, hparams)
         init_geo = best_sampled_latents[0]
@@ -620,9 +582,9 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     
     if 'app' in opt_vars:
         optimizer_app = torch.optim.AdamW(params=[lat_app],
-                                          lr=hparams['optimizer_lr'],
+                                          lr=hparams['optimizer_lr_app'],
                                           betas=(hparams['optimizer_beta1'], 0.999),
-                                          weight_decay=hparams['lambda'],
+                                          weight_decay=hparams['lambda_app'],
                                           maximize=True)
         
         lr_scheduler_app = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -673,17 +635,18 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         prev_step_app = step_app
         
         if 'app' in opt_vars:
-            lat_rep_aug, camera_params_aug, phong_params_aug, light_params_aug = get_augmented_params_color(lat_rep, hparams)
-            CLIP_score_app, _, _, _, _ = forward(lat_rep_aug, prompt, camera_params_aug, phong_params_aug, light_params_aug, with_app_grad=True, color=True)
+            #lat_rep_aug, camera_params_aug, phong_params_aug, light_params_aug = get_augmented_params_color(lat_rep, hparams)
+            #CLIP_score_app, _, _, _, _ = forward(lat_rep_aug, prompt, camera_params_aug, phong_params_aug, light_params_aug, with_app_grad=True, color=True)
+            batch_CLIP_score_app, norm_geo, norm_exp, norm_app = batch_forward(lat_rep, prompt, app_params, with_app_grad=True)
             optimizer_app.zero_grad()
-            CLIP_score_app.backward()
+            batch_CLIP_score_app.backward()
             optimizer_app.step()
-            lr_scheduler_app.step(CLIP_score_app)
+            lr_scheduler_app.step(batch_CLIP_score_app)
 
         batch_CLIP_score, norm_geo, norm_exp, norm_app = batch_forward(lat_rep, prompt, hparams, with_app_grad=False)
-
-        #batch_score = loss_fn(torch.clone(batch_CLIP_score), batch_log_prob_geo_score, batch_log_prob_exp_score, batch_log_prob_app_score, hparams)
-        batch_score = torch.clone(batch_CLIP_score)
+        geo_std_score = get_std_score(lat_rep)
+        batch_score = loss_fn(torch.clone(batch_CLIP_score), geo_std_score, hparams)
+        #batch_score = torch.clone(batch_CLIP_score)
         
 
         if batch_score > best_score:
@@ -724,32 +687,27 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         
 
         writer.add_scalar('Batch Score', batch_score, iteration)
+        writer.add_scalar('Geo Std Score', geo_std_score, iteration)
         writer.add_scalar('Batch CLIP Score', batch_CLIP_score, iteration)
         writer.add_scalar('Norm Geometry Code', norm_geo, iteration)
         writer.add_scalar('Norm Expression Code', norm_exp, iteration)
         writer.add_scalar('Norm Appearance Code', norm_app, iteration)
         writer.add_scalar('learning rate', optimizer_geo_exp.param_groups[0]['lr'], iteration)
+
         if 'geo' in opt_vars:
             lat_geo.grad = lat_geo.grad.nan_to_num(0.) # TODO: is this still needed?
             gradient_lat_geo = lat_geo.grad
             writer.add_scalar('Gradient norm of Score w.r.t. Geometry Latent', gradient_lat_geo.norm(), iteration)
             
-            # Difference between lat_rep and previous lat_rep
-            lat_geo_new = lat_rep[0].detach().cpu()
-            lat_geo_diff = torch.abs(lat_geo_new - lat_geo_old)
-            mean_diff = torch.mean(lat_geo_diff.abs())
-            writer.add_scalar('Mean percentual diff geo', mean_diff, iteration)
-            
-            
             lat_geo_fig = plt.figure()
             lat_geo_plot = lat_geo_fig.add_subplot(1,2,1)
-            lat_geo_plot.plot(lat_geo.detach().cpu().numpy())
+            lat_geo_plot.plot(torch.reshape(lat_rep[0], (-1,)).detach().cpu().numpy())
             lat_geo_std_plot = lat_geo_fig.add_subplot(1,2,2)
-            lat_geo_std_plot.plot((lat_geo.detach().cpu()) * geo_std.detach().cpu())
+            lat_geo_std_plot.plot((torch.reshape(lat_rep[0], (-1,)).detach().cpu()) * geo_std.detach().cpu())
             writer.add_figure('Geometry Latent Code', lat_geo_fig, iteration)
             writer.add_histogram('Geometry Latent Code in normalized space', lat_geo.detach().cpu(), iteration)
 
-        if 'exp' in opt_vars:
+        if False: #'exp' in opt_vars:
             gradient_lat_exp = lat_exp.grad
             writer.add_scalar('Gradient norm of Score w.r.t. Expression Latent', gradient_lat_exp.norm(), iteration)
             
@@ -790,39 +748,29 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         lr_scheduler.step(batch_score)
         
 
-        if False:#'geo' in opt_vars:
+        if 'geo' in opt_vars:
             # Difference between lat_rep and previous lat_rep
             lat_geo_new = lat_rep[0].detach().cpu()
             lat_geo_diff = torch.abs(lat_geo_new - lat_geo_old)
             mean_diff = torch.mean(lat_geo_diff.abs())
-            writer.add_scalar('Mean percentual diff geo wrt std dev', mean_diff, iteration)
+            writer.add_scalar('Mean percentual diff geo', mean_diff, iteration)
 
             # Angle between step and previous step
             step_geo = lat_geo_new.squeeze(0).squeeze(0) - lat_geo_old.squeeze(0).squeeze(0)
             normalized_step_geo = step_geo / step_geo.norm(dim=-1, keepdim=True)
             normalized_prev_step_geo = prev_step_geo / prev_step_geo.norm(dim=-1, keepdim=True)
-            cos_theta = torch.dot(normalized_step_geo, normalized_prev_step_geo)
+            cos_theta = torch.dot(normalized_step_geo.cpu(), normalized_prev_step_geo.cpu())
             cos_theta = torch.clamp(cos_theta, -1.0, 1.0)
             angle_rad = torch.acos(cos_theta)
             angle_deg = torch.rad2deg(angle_rad)
             writer.add_scalar('Angle between steps geo', angle_deg, iteration)
 
-        if False:#'exp' in opt_vars:
-            # Difference between lat_rep and previous lat_rep
-            lat_exp_new = lat_rep[1].detach().cpu()
-            lat_exp_diff = torch.abs(lat_exp_new - lat_exp_old)
-            mean_diff = torch.mean(lat_exp_diff.abs())
-            writer.add_scalar('Mean percentual diff exp wrt std dev', mean_diff, iteration)
+            step_geo = lat_geo_new.squeeze(0).squeeze(0) - lat_geo_old.squeeze(0).squeeze(0)
+            a = step_geo
+            fig_step = plt.figure()
+            plt.plot(a)
+            writer.add_figure('Step_geo', fig_step, iteration)
 
-            # Angle between lat_rep and previous lat_rep
-            step_exp = lat_exp_new.squeeze(0).squeeze(0) - lat_exp_old.squeeze(0).squeeze(0)
-            normalized_step_exp = step_exp / step_exp.norm(dim=-1, keepdim=True)
-            normalized_prev_step_exp = prev_step_exp / prev_step_exp.norm(dim=-1, keepdim=True)
-            cos_theta = torch.dot(normalized_step_exp, normalized_prev_step_exp)
-            cos_theta = torch.clamp(cos_theta, -1.0, 1.0)
-            angle_rad = torch.acos(cos_theta)
-            angle_deg = torch.rad2deg(angle_rad)
-            writer.add_scalar('Angle between steps exp', angle_deg, iteration)
 
 
         optimizer_geo_exp.zero_grad()          
