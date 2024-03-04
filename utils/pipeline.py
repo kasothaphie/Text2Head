@@ -147,30 +147,53 @@ def get_debugging_details(lat_rep_geo):
         '''
 
 def get_std_score(lat_rep):
+    # --- Geometry ---
     geo = lat_rep[0]
     geo_glob = geo[:64]
     geo_all_local = geo[64:] #[2112]
     geo_all_local = torch.reshape(geo_all_local, (-1, 32)) # [66, 32]
 
-    std_glob = geo_glob.std()
-    std_local = geo_all_local.std(dim=-1)
+    std_glob_geo = geo_glob.std()
+    std_local_geo = geo_all_local.std(dim=-1)
 
-    all_std = torch.cat((std_glob.unsqueeze(0), std_local), dim=0)
-    mean_std = all_std.mean()
-    diff = (all_std - mean_std).abs().sum()
-    print('diff', diff)
-    return diff
+    all_std_geo = torch.cat((std_glob_geo.unsqueeze(0), std_local_geo), dim=0)
+    mean_std_geo = all_std_geo.mean()
+    diff_geo = (all_std_geo - mean_std_geo).abs().sum()
+
+    # --- Appearance ---
+    app = lat_rep[2]
+    app_glob = app[:64]
+    app_all_local = app[64:] #[2112]
+    app_all_local = torch.reshape(app_all_local, (-1, 32)) # [66, 32]
+
+    std_glob_app = app_glob.std()
+    std_local_app = app_all_local.std(dim=-1)
+
+    all_std_app = torch.cat((std_glob_app.unsqueeze(0), std_local_app), dim=0)
+    mean_std_app = all_std_app.mean()
+    diff_app = (all_std_app - mean_std_app).abs().sum()
+
+    return diff_geo, diff_app
     
 
 def loss_fn(clip_score, geo_std_score, hparams):
     if 'geo' in opt_vars:
-        lambda_geo = hparams["lambda_geo"]
+        gamma_geo = hparams["gamma_geo"]
     else:
-        lambda_geo = 0
+        gamma_geo = 0
 
     loss = clip_score
-    loss -= lambda_geo * geo_std_score.cpu()
-    loss /= 1 + lambda_geo
+    loss -= gamma_geo * geo_std_score.cpu()
+    loss /= 1 + gamma_geo
+
+    return loss
+
+def loss_fn_app(clip_score, app_std_score, hparams):
+    gamma_app = hparams["gamma_app"]
+
+    loss = clip_score
+    loss -= gamma_app * app_std_score.cpu()
+    loss /= 1 + gamma_app
 
     return loss
 
@@ -569,7 +592,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     optimizer_geo_exp = torch.optim.AdamW(params=opt_params,
                     lr=hparams['optimizer_lr'],
                     betas=(hparams['optimizer_beta1'], 0.999),
-                    weight_decay=hparams['lambda'],
+                    weight_decay=hparams['lambda_geo'],
                     maximize=True)
     
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -635,20 +658,18 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         prev_step_app = step_app
         
         if 'app' in opt_vars:
-            #lat_rep_aug, camera_params_aug, phong_params_aug, light_params_aug = get_augmented_params_color(lat_rep, hparams)
-            #CLIP_score_app, _, _, _, _ = forward(lat_rep_aug, prompt, camera_params_aug, phong_params_aug, light_params_aug, with_app_grad=True, color=True)
             batch_CLIP_score_app, norm_geo, norm_exp, norm_app = batch_forward(lat_rep, prompt, app_params, with_app_grad=True)
+            _, app_std_score = get_std_score(lat_rep)
+            batch_score_app = loss_fn_app(torch.clone(batch_CLIP_score_app), app_std_score, hparams)
             optimizer_app.zero_grad()
-            batch_CLIP_score_app.backward()
+            batch_score_app.backward()
             optimizer_app.step()
-            lr_scheduler_app.step(batch_CLIP_score_app)
+            lr_scheduler_app.step(batch_score_app)
 
         batch_CLIP_score, norm_geo, norm_exp, norm_app = batch_forward(lat_rep, prompt, hparams, with_app_grad=False)
-        geo_std_score = get_std_score(lat_rep)
+        geo_std_score, _ = get_std_score(lat_rep)
         batch_score = loss_fn(torch.clone(batch_CLIP_score), geo_std_score, hparams)
-        #batch_score = torch.clone(batch_CLIP_score)
         
-
         if batch_score > best_score:
             best_score = batch_score.detach().cpu()
             best_latent_geo = torch.clone(lat_rep[0]).cpu()
