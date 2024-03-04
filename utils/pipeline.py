@@ -709,9 +709,10 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
 
         writer.add_scalar('Batch Score', batch_score, iteration)
         writer.add_scalar('Geo Std Score', geo_std_score, iteration)
+        writer.add_scalar('App Std Score', app_std_score, iteration)
         writer.add_scalar('Batch CLIP Score', batch_CLIP_score, iteration)
         writer.add_scalar('Norm Geometry Code', norm_geo, iteration)
-        writer.add_scalar('Norm Expression Code', norm_exp, iteration)
+        #writer.add_scalar('Norm Expression Code', norm_exp, iteration)
         writer.add_scalar('Norm Appearance Code', norm_app, iteration)
         writer.add_scalar('learning rate', optimizer_geo_exp.param_groups[0]['lr'], iteration)
 
@@ -726,7 +727,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             lat_geo_std_plot = lat_geo_fig.add_subplot(1,2,2)
             lat_geo_std_plot.plot((torch.reshape(lat_rep[0], (-1,)).detach().cpu()) * geo_std.detach().cpu())
             writer.add_figure('Geometry Latent Code', lat_geo_fig, iteration)
-            writer.add_histogram('Geometry Latent Code in normalized space', lat_geo.detach().cpu(), iteration)
+            #writer.add_histogram('Geometry Latent Code in normalized space', lat_geo.detach().cpu(), iteration)
 
         if False: #'exp' in opt_vars:
             gradient_lat_exp = lat_exp.grad
@@ -762,7 +763,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             lat_app_std_plot = lat_app_fig.add_subplot(1,2,2)
             lat_app_std_plot.plot((lat_app.detach().cpu()) * app_std.detach().cpu())
             writer.add_figure('Appearence Latent Code', lat_app_fig, iteration)
-            writer.add_histogram('Appearence Latent Code in normalized space', lat_app.detach().cpu(), iteration)
+            #writer.add_histogram('Appearence Latent Code in normalized space', lat_app.detach().cpu(), iteration)
         
         
         optimizer_geo_exp.step()
@@ -790,7 +791,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             a = step_geo
             fig_step = plt.figure()
             plt.plot(a)
-            writer.add_figure('Step_geo', fig_step, iteration)
+            #writer.add_figure('Step_geo', fig_step, iteration)
 
 
 
