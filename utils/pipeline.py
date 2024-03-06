@@ -153,25 +153,25 @@ def get_std_score(lat_rep):
     geo_all_local = geo[64:] #[2112]
     geo_all_local = torch.reshape(geo_all_local, (-1, 32)) # [66, 32]
 
-    std_glob_geo = geo_glob.std()
-    std_local_geo = geo_all_local.std(dim=-1)
+    mean_glob_geo = geo_glob.abs().mean()
+    mean_local_geo = geo_all_local.abs().mean(dim=-1)
 
-    all_std_geo = torch.cat((std_glob_geo.unsqueeze(0), std_local_geo), dim=0)
-    mean_std_geo = all_std_geo.mean()
-    diff_geo = (all_std_geo - mean_std_geo).abs().sum()
-
+    all_mean_geo = torch.cat((mean_glob_geo.unsqueeze(0), mean_local_geo), dim=0)
+    mean_mean_geo = all_mean_geo.mean()
+    diff_geo = (all_mean_geo - mean_mean_geo).abs().mean()
+  
     # --- Appearance ---
     app = lat_rep[2]
     app_glob = app[:64]
     app_all_local = app[64:] #[2112]
     app_all_local = torch.reshape(app_all_local, (-1, 32)) # [66, 32]
 
-    std_glob_app = app_glob.std()
-    std_local_app = app_all_local.std(dim=-1)
+    mean_glob_app = app_glob.abs().mean()
+    mean_local_app = app_all_local.abs().mean(dim=-1)
 
-    all_std_app = torch.cat((std_glob_app.unsqueeze(0), std_local_app), dim=0)
-    mean_std_app = all_std_app.mean()
-    diff_app = (all_std_app - mean_std_app).abs().sum()
+    all_mean_app = torch.cat((mean_glob_app.unsqueeze(0), mean_local_app), dim=0)
+    mean_mean_app = all_mean_app.mean()
+    diff_app = (all_mean_app - mean_mean_app).abs().mean()
 
     return diff_geo, diff_app
     
@@ -184,7 +184,6 @@ def loss_fn(clip_score, geo_std_score, hparams):
 
     loss = clip_score
     loss -= gamma_geo * geo_std_score.cpu()
-    loss /= 1 + gamma_geo
 
     return loss
 
@@ -193,7 +192,6 @@ def loss_fn_app(clip_score, app_std_score, hparams):
 
     loss = clip_score
     loss -= gamma_app * app_std_score.cpu()
-    loss /= 1 + gamma_app
 
     return loss
 
@@ -708,8 +706,8 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         
 
         writer.add_scalar('Batch Score', batch_score, iteration)
-        writer.add_scalar('Geo Std Score', geo_std_score, iteration)
-        writer.add_scalar('App Std Score', app_std_score, iteration)
+        writer.add_scalar('Geo Local Mean Score', geo_std_score, iteration)
+        writer.add_scalar('App Local Mean Score', app_std_score, iteration)
         writer.add_scalar('Batch CLIP Score', batch_CLIP_score, iteration)
         writer.add_scalar('Norm Geometry Code', norm_geo, iteration)
         #writer.add_scalar('Norm Expression Code', norm_exp, iteration)
