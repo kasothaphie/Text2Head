@@ -591,6 +591,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
                     lr=hparams['optimizer_lr'],
                     betas=(hparams['optimizer_beta1'], 0.999),
                     weight_decay=hparams['lambda_geo'],
+                    amsgrad=True,
                     maximize=True)
     
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -606,6 +607,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
                                           lr=hparams['optimizer_lr_app'],
                                           betas=(hparams['optimizer_beta1'], 0.999),
                                           weight_decay=hparams['lambda_app'],
+                                          amsgrad=True,
                                           maximize=True)
         
         lr_scheduler_app = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -613,8 +615,7 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             mode='max',
             factor=hparams['lr_scheduler_factor'],
             patience=hparams['lr_scheduler_patience'],
-            min_lr=hparams['lr_scheduler_min_lr']
-    )
+            min_lr=hparams['lr_scheduler_min_lr'])
 
     # Normal Mode
     now = datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
@@ -662,7 +663,6 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             optimizer_app.zero_grad()
             batch_score_app.backward()
             optimizer_app.step()
-            lr_scheduler_app.step(batch_score_app)
 
         batch_CLIP_score, norm_geo, norm_exp, norm_app = batch_forward(lat_rep, prompt, hparams, with_app_grad=False)
         geo_std_score, _ = get_std_score(lat_rep)
@@ -765,7 +765,10 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
         
         
         optimizer_geo_exp.step()
-        lr_scheduler.step(batch_score)
+        lr_scheduler.step(hparams["color_prob"] * CLIP_score_col + (1 - hparams["color_prob"]) * CLIP_score_no_col)
+         
+        if 'app' in opt_vars:
+            lr_scheduler_app.step(CLIP_score_col)
         
 
         if 'geo' in opt_vars:
@@ -788,8 +791,8 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
             step_geo = lat_geo_new.squeeze(0).squeeze(0) - lat_geo_old.squeeze(0).squeeze(0)
             a = step_geo
             fig_step = plt.figure()
-            plt.plot(a)
-            #writer.add_figure('Step_geo', fig_step, iteration)
+            #plt.plot(a)
+            writer.add_figure('Step_geo', fig_step, iteration)
 
 
 
