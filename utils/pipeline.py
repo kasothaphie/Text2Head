@@ -33,7 +33,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 opt_vars = ['geo', 'app'] # add 'exp' and/or 'app' (['geo', 'exp', 'app'])
 grad_vars = ['geo'] # you can only skip exp and app
 
-CLIP_model, CLIP_preprocess = clip.load("ViT-B/32", device="cpu")
+CLIP_model, CLIP_preprocess = clip.load("ViT-B/32", device="cuda")
 
     
 weight_dir_shape = mono_env_paths.EXPERIMENT_DIR_REMOTE + '/'
@@ -69,7 +69,7 @@ neural_3dmm, latent_codes = construct_n3dmm(
 # load checkpoint from trained NPHM model, including the latent codes
 ckpt_path = osp.join(weight_dir_shape, 'checkpoints/checkpoint_epoch_2500.tar')
 load_checkpoint(ckpt_path, neural_3dmm, latent_codes)
-    
+
 def sdf(sdf_inputs, lat_geo, lat_exp, lat_app):
     dict_in = {
         "queries":sdf_inputs
@@ -198,21 +198,21 @@ def loss_fn_app(clip_score, app_std_score, hparams):
 def get_image_clip_embedding(lat_rep, camera_params, phong_params, light_params, with_app_grad, color):
     image = render(sdf, lat_rep, camera_params, phong_params, light_params, color, with_app_grad=with_app_grad)
     image_c_first = image.permute(2, 0, 1)
-    image_preprocessed = clip_tensor_preprocessor(image_c_first).unsqueeze(0).cpu()
-    CLIP_embedding_image = CLIP_model.encode_image(image_preprocessed) # [1, 512]
+    image_preprocessed = clip_tensor_preprocessor(image_c_first).unsqueeze(0)
+    CLIP_embedding_image = CLIP_model.encode_image(image_preprocessed.cuda()).cpu() # [1, 512]
     normalized_CLIP_embedding_image = CLIP_embedding_image / CLIP_embedding_image.norm(dim=-1, keepdim=True)
     
     return normalized_CLIP_embedding_image, image
 
 def get_text_clip_embedding(prompt):
-    prompt_tokenized = clip.tokenize(prompt).cpu()
-    text_embedded = CLIP_model.encode_text(prompt_tokenized)
+    prompt_tokenized = clip.tokenize(prompt)
+    text_embedded = CLIP_model.encode_text(prompt_tokenized.cuda()).cpu()
     normalized_CLIP_embedding_text = text_embedded / text_embedded.norm(dim=-1, keepdim=True)
     
     return normalized_CLIP_embedding_text
 
 def clip_score(image_embedding, text_embedding):
-    return 100 * torch.matmul(image_embedding, text_embedding.T)
+    return 100 * torch.matmul(image_embedding.float(), text_embedding.T.float())
 
 
 def latent_norms(lat_rep):

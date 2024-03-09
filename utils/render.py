@@ -194,7 +194,7 @@ def rotate(camera_params, camera_position_in, directions_in):
 
 def render(model, lat_rep, camera_params, phong_params, light_params, color=True, mesh_path=None, with_app_grad=False):
 
-    def sdf(positions, chunk_size=10000):
+    def sdf(positions, chunk_size=20000):
     
         def get_sdf(nphm_input, lat_rep_in):
             #distance, color = model(nphm_input.to(device), *lat_rep_in)
@@ -241,18 +241,13 @@ def render(model, lat_rep, camera_params, phong_params, light_params, color=True
 
         hits, hit_mask, _ = acc_sphere_trace(sdf, starting_positions, directions, camera_params['max_ray_length'], scale=np.sqrt(2.), eps=0.001)
 
-        #hits_1, hit_mask_1, _ = acc_sphere_trace(sdf, starting_positions, directions, camera_params['max_ray_length'], scale=np.sqrt(2.), eps=0.025)
-    
+        #hits_1, hit_mask_1, _ = acc_sphere_trace(sdf, starting_positions, directions, camera_params['max_ray_length'], scale=2., eps=0.1)
         #hits_2, hit_mask_2, _ = acc_sphere_trace(sdf, hits_1[hit_mask_1], directions[hit_mask_1], camera_params['max_ray_length'], scale=np.sqrt(2.), eps=0.001)
             
 
     #hit_mask = torch.zeros(N).bool()
     #hit_mask[hit_mask_1] = hit_mask_2
-    #hit_mask = torch.zeros(N).bool()
-    #hit_mask[hit_mask_1] = hit_mask_2
 
-    #hits = torch.zeros(N, 3)
-    #hits[hit_mask] = hits_2[hit_mask_2]
     #hits = torch.zeros(N, 3)
     #hits[hit_mask] = hits_2[hit_mask_2]
 
