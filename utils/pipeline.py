@@ -284,7 +284,7 @@ def get_augmented_params_color(lat_rep, hparams):
         "camera_angle_rho": angle_rho,
         "camera_angle_theta": angle_theta,
         "focal_length": 2.57,
-        "max_ray_length": 3,
+        "max_ray_length": 3.5,
         # Image
         "resolution_y": hparams["resolution"],
         "resolution_x": hparams["resolution"]
@@ -354,7 +354,7 @@ def get_augmented_params_no_color(lat_rep, hparams):
         "camera_angle_rho": angle_rho,
         "camera_angle_theta": angle_theta,
         "focal_length": 2.57,
-        "max_ray_length": 3,
+        "max_ray_length": 3.5,
         # Image
         "resolution_y": hparams["resolution"],
         "resolution_x": hparams["resolution"]
@@ -451,7 +451,7 @@ def get_optimal_params_color(hparams):
             "camera_angle_rho": 15., #45.,
             "camera_angle_theta": 0.,
             "focal_length": 2.57,
-            "max_ray_length": 3,
+            "max_ray_length": 3.5,
             # Image
             "resolution_y": 180,
             "resolution_x": 180
@@ -488,7 +488,7 @@ def get_optimal_params(hparams):
         "camera_angle_rho": 45.,
         "camera_angle_theta": 0.,
         "focal_length": 2.57,
-        "max_ray_length": 3,
+        "max_ray_length": 3.5,
         # Image
         "resolution_y": 180,
         "resolution_x": 180
