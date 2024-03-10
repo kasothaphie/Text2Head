@@ -13,11 +13,11 @@ DINO_model = AutoModel.from_pretrained('facebook/dinov2-base').to(device)
 
 ####################### TOUCH ZONE #######################
 
-lat_rep_path = '../notebooks/lat_rep_Freddie_Mercury_3.pt'
-prompt ='Freddie Mercury'
-gt_image_paths = ['../celebs/Freddy_Mercury_1.png',
-                  '../celebs/Freddy_Mercury_2.png',
-                  '../celebs/Freddy_Mercury_3.png'] # square png image
+lat_rep_path = '../notebooks/lat_rep_Audrey_Hepburn_1.pt'
+prompt ='Audrey Hepburn'
+gt_image_paths = ['../celebs/Audrey_Hepburn_1.png',
+                  '../celebs/Audrey_Hepburn_2.png',
+                  '../celebs/Audrey_Hepburn_3.png'] # square png image
 
 ##########################################################
 
@@ -161,9 +161,18 @@ def get_scores(lat_rep, prompt, gt_image_paths):
 
     df = pd.DataFrame(data)
 
+    all_clip_scores = np.array(data['CLIP Score'])
+    all_dino_scores = np.array(data['DINO Score'])
+
+    mean_clip_scores = np.mean(all_clip_scores, axis=0)
+    mean_dino_scores = np.mean(all_dino_scores, axis=0)
+
     print('###########################################################################')
     print(f'results for {prompt}')
     print(df)
+
+    print(f'Mean CLIP Scores: {mean_clip_scores}')
+    print(f'Mean DINO Scores: {mean_dino_scores}')
 
     dino_scores = []
     n = len(gt_DINO)
