@@ -1,0 +1,148 @@
+import torch
+import matplotlib.pyplot as plt
+import numpy as np
+from PIL import Image
+from transformers import AutoImageProcessor, AutoModel
+import pandas as pd
+
+from utils.pipeline import get_image_clip_embedding, get_text_clip_embedding, clip_score
+device = "cuda"
+
+DINO_processor = AutoImageProcessor.from_pretrained('facebook/dinov2-base')
+DINO_model = AutoModel.from_pretrained('facebook/dinov2-base').to(device)
+
+####################### TOUCH ZONE #######################
+
+lat_rep_path = '../notebooks/lat_rep_0_100_1.pt'
+prompt ='Bella Hadid'
+gt_image_path = '../im/image_test.png' # square png image
+
+##########################################################
+
+resolution = 400
+
+camera_params_front = {
+            "camera_distance": 0.21 * 2.57,
+            "camera_angle_rho": 0.,
+            "camera_angle_theta": 0.,
+            "focal_length": 2.57,
+            "max_ray_length": 3.5,
+            # Image
+            "resolution_y": resolution,
+            "resolution_x": resolution
+        }
+
+camera_params_side= {
+            "camera_distance": 0.21 * 2.57,
+            "camera_angle_rho": 45.,
+            "camera_angle_theta": 0.,
+            "focal_length": 2.57,
+            "max_ray_length": 3.5,
+            # Image
+            "resolution_y": resolution,
+            "resolution_x": resolution
+        }
+
+phong_params_color = {
+            "ambient_coeff": 0.32,
+            "diffuse_coeff": 0.85,
+            "specular_coeff": 0.34,
+            "shininess": 25,
+            # Colors
+            "background_color": torch.tensor([1., 1., 1.])
+        }
+
+light_params_color = {
+            "amb_light_color": torch.tensor([0.65, 0.65, 0.65]),
+            # light 1
+            "light_intensity_1": 1.69,
+            "light_color_1": torch.tensor([1., 1., 1.]),
+            "light_dir_1": torch.tensor([0, -0.18, -0.8]),
+            # light p
+            "light_intensity_p": 0.52,
+            "light_color_p": torch.tensor([1., 1., 1.]),
+            "light_pos_p": torch.tensor([0.17, 2.77, -2.25])
+    }
+
+phong_params_no_color = {
+        "ambient_coeff": 0.51,
+        "diffuse_coeff": 0.75,
+        "specular_coeff": 0.64,
+        "shininess": 0.5,
+        # Colors
+        "object_color": torch.tensor([0.3, 0.3, 0.3]),
+        "background_color": torch.tensor([1., 1., 1.])
+    }
+
+light_params_no_color = {
+        "amb_light_color": torch.tensor([0.65, 0.65, 0.65]),
+        # light 1
+        "light_intensity_1": 1.42,
+        "light_color_1": torch.tensor([1., 1., 1.]),
+        "light_dir_1": torch.tensor([0., -0.4, -0.67]),
+        # light p
+        "light_intensity_p": 0.62,
+        "light_color_p": torch.tensor([1., 1., 1.]),
+        "light_pos_p": torch.tensor([1.19, -1.27, 2.24])
+    }
+
+def get_image_DINO_embedding(image):
+    input = DINO_processor(images=image, return_tensors="pt", do_rescale=False).to(device)
+    output = DINO_model(**input)
+    CLS_token = output.last_hidden_state # [1, 257, 768]
+    DINO_embedding  = CLS_token.mean(dim=1) # [1, 768]
+    DINO_embedding /= DINO_embedding.norm(dim=-1, keepdim=True)
+    return DINO_embedding
+
+def dino_score(DINO_embedding, gt_embedding):
+    DINO_similarity = 100 * torch.matmul(DINO_embedding, gt_embedding.T)
+    return DINO_similarity
+
+def get_scores(lat_rep, prompt, gt_image):
+
+    normalized_CLIP_embedding_text = get_text_clip_embedding(prompt)
+
+    normalized_CLIP_embedding_image_front_c, image_front_c = get_image_clip_embedding(lat_rep, camera_params_front, phong_params_color, light_params_color, with_app_grad=False, color=True)
+    normalized_CLIP_embedding_image_side_c, image_side_c = get_image_clip_embedding(lat_rep, camera_params_side, phong_params_color, light_params_color, with_app_grad=False, color=True)
+    normalized_CLIP_embedding_image_front_no_c, image_front_no_c = get_image_clip_embedding(lat_rep, camera_params_front, phong_params_no_color, light_params_no_color, with_app_grad=False, color=False)
+    normalized_CLIP_embedding_image_side_no_c, image_side_no_c = get_image_clip_embedding(lat_rep, camera_params_side, phong_params_no_color, light_params_no_color, with_app_grad=False, color=False)
+    
+    CLIP_score_front_c = clip_score(normalized_CLIP_embedding_image_front_c, normalized_CLIP_embedding_text)
+    CLIP_score_side_c = clip_score(normalized_CLIP_embedding_image_side_c, normalized_CLIP_embedding_text)
+    CLIP_score_front_no_c = clip_score(normalized_CLIP_embedding_image_front_no_c, normalized_CLIP_embedding_text)
+    CLIP_score_side_no_c = clip_score(normalized_CLIP_embedding_image_side_no_c, normalized_CLIP_embedding_text)
+
+    normalized_DINO_embedding_image_gt = get_image_DINO_embedding(gt_image)
+
+    normalized_DINO_embedding_image_front_c = get_image_DINO_embedding(image_front_c)
+    normalized_DINO_embedding_image_side_c = get_image_DINO_embedding(image_side_c)
+    normalized_DINO_embedding_image_front_no_c = get_image_DINO_embedding(image_front_no_c)
+    normalized_DINO_embedding_image_side_no_c = get_image_DINO_embedding(image_side_no_c)
+
+    DINO_score_front_c = dino_score(normalized_DINO_embedding_image_front_c, normalized_DINO_embedding_image_gt)
+    DINO_score_side_c = dino_score(normalized_DINO_embedding_image_side_c, normalized_DINO_embedding_image_gt)
+    DINO_score_front_no_c = dino_score(normalized_DINO_embedding_image_front_no_c, normalized_DINO_embedding_image_gt)
+    DINO_score_side_no_c = dino_score(normalized_DINO_embedding_image_side_no_c, normalized_DINO_embedding_image_gt)
+
+    data = {
+        'Condition': ['Front view with color', 'Side view with color', 'Front view without color', 'Side view without color'],
+        'CLIP Score': [CLIP_score_front_c.detach().cpu().numpy(), CLIP_score_side_c.detach().cpu().numpy(), CLIP_score_front_no_c.detach().cpu().numpy(), CLIP_score_side_no_c.detach().cpu().numpy()],
+        'DINO Score': [DINO_score_front_c.detach().cpu().numpy(), DINO_score_side_c.detach().cpu().numpy(), DINO_score_front_no_c.detach().cpu().numpy(), DINO_score_side_no_c.detach().cpu().numpy()]
+    }
+
+    df = pd.DataFrame(data)
+
+    print('###########################################################################')
+    print(f'results for {prompt}')
+    print(df)
+
+lat_rep = torch.load(lat_rep_path)
+lat_rep = [tensor.to(device) for tensor in lat_rep]
+
+image_pil = Image.open(gt_image_path)
+image_pil_rgb = image_pil.convert('RGB')
+image_numpy = np.array(image_pil_rgb)
+image = torch.tensor(image_numpy/255)
+
+with torch.no_grad():
+    get_scores(lat_rep, prompt, image)
