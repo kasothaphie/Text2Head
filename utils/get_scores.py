@@ -13,9 +13,11 @@ DINO_model = AutoModel.from_pretrained('facebook/dinov2-base').to(device)
 
 ####################### TOUCH ZONE #######################
 
-lat_rep_path = '../notebooks/lat_rep_0_100_1.pt'
-prompt ='Bella Hadid'
-gt_image_path = '../im/image_test.png' # square png image
+lat_rep_path = '../notebooks/lat_rep_Freddie_Mercury_3.pt'
+prompt ='Freddie Mercury'
+gt_image_paths = ['../celebs/Freddy_Mercury_1.png',
+                  '../celebs/Freddy_Mercury_2.png',
+                  '../celebs/Freddy_Mercury_3.png'] # square png image
 
 ##########################################################
 
@@ -98,7 +100,7 @@ def dino_score(DINO_embedding, gt_embedding):
     DINO_similarity = 100 * torch.matmul(DINO_embedding, gt_embedding.T)
     return DINO_similarity
 
-def get_scores(lat_rep, prompt, gt_image):
+def get_scores(lat_rep, prompt, gt_image_paths):
 
     normalized_CLIP_embedding_text = get_text_clip_embedding(prompt)
 
@@ -112,22 +114,49 @@ def get_scores(lat_rep, prompt, gt_image):
     CLIP_score_front_no_c = clip_score(normalized_CLIP_embedding_image_front_no_c, normalized_CLIP_embedding_text)
     CLIP_score_side_no_c = clip_score(normalized_CLIP_embedding_image_side_no_c, normalized_CLIP_embedding_text)
 
-    normalized_DINO_embedding_image_gt = get_image_DINO_embedding(gt_image)
-
     normalized_DINO_embedding_image_front_c = get_image_DINO_embedding(image_front_c)
     normalized_DINO_embedding_image_side_c = get_image_DINO_embedding(image_side_c)
     normalized_DINO_embedding_image_front_no_c = get_image_DINO_embedding(image_front_no_c)
     normalized_DINO_embedding_image_side_no_c = get_image_DINO_embedding(image_side_no_c)
 
-    DINO_score_front_c = dino_score(normalized_DINO_embedding_image_front_c, normalized_DINO_embedding_image_gt)
-    DINO_score_side_c = dino_score(normalized_DINO_embedding_image_side_c, normalized_DINO_embedding_image_gt)
-    DINO_score_front_no_c = dino_score(normalized_DINO_embedding_image_front_no_c, normalized_DINO_embedding_image_gt)
-    DINO_score_side_no_c = dino_score(normalized_DINO_embedding_image_side_no_c, normalized_DINO_embedding_image_gt)
+    gt_DINO = []
+    DINO_front_c = []
+    DINO_side_c = []
+    DINO_front_no_c = []
+    DINO_side_no_c = []
+
+    for image_path in gt_image_paths:
+        image_pil = Image.open(image_path)
+        image_pil_rgb = image_pil.convert('RGB')
+        image_numpy = np.array(image_pil_rgb)
+        gt_image = torch.tensor(image_numpy/255)
+
+        normalized_DINO_embedding_image_gt = get_image_DINO_embedding(gt_image)
+        gt_DINO.append(normalized_DINO_embedding_image_gt)
+
+        DINO_score_front_c = dino_score(normalized_DINO_embedding_image_front_c, normalized_DINO_embedding_image_gt)
+        DINO_front_c.append(DINO_score_front_c)
+        DINO_score_side_c = dino_score(normalized_DINO_embedding_image_side_c, normalized_DINO_embedding_image_gt)
+        DINO_side_c.append(DINO_score_side_c)
+        DINO_score_front_no_c = dino_score(normalized_DINO_embedding_image_front_no_c, normalized_DINO_embedding_image_gt)
+        DINO_front_no_c.append(DINO_score_front_no_c)
+        DINO_score_side_no_c = dino_score(normalized_DINO_embedding_image_side_no_c, normalized_DINO_embedding_image_gt)
+        DINO_side_no_c.append(DINO_score_side_no_c)
+    
+    dino_scores_front_c = torch.tensor(DINO_front_c)
+    dino_scores_side_c = torch.tensor(DINO_side_c)
+    dino_scores_front_no_c = torch.tensor(DINO_front_no_c)
+    dino_scores_side_no_c = torch.tensor(DINO_side_no_c)
+
+    dino_front_c = dino_scores_front_c.mean()
+    dino_side_c = dino_scores_side_c.mean()
+    dino_front_no_c = dino_scores_front_no_c.mean()
+    dino_side_no_c = dino_scores_side_no_c.mean()
 
     data = {
         'Condition': ['Front view with color', 'Side view with color', 'Front view without color', 'Side view without color'],
         'CLIP Score': [CLIP_score_front_c.detach().cpu().numpy(), CLIP_score_side_c.detach().cpu().numpy(), CLIP_score_front_no_c.detach().cpu().numpy(), CLIP_score_side_no_c.detach().cpu().numpy()],
-        'DINO Score': [DINO_score_front_c.detach().cpu().numpy(), DINO_score_side_c.detach().cpu().numpy(), DINO_score_front_no_c.detach().cpu().numpy(), DINO_score_side_no_c.detach().cpu().numpy()]
+        'DINO Score': [dino_front_c.detach().cpu().numpy(), dino_side_c.detach().cpu().numpy(), dino_front_no_c.detach().cpu().numpy(), dino_side_no_c.detach().cpu().numpy()]
     }
 
     df = pd.DataFrame(data)
@@ -136,13 +165,22 @@ def get_scores(lat_rep, prompt, gt_image):
     print(f'results for {prompt}')
     print(df)
 
+    dino_scores = []
+    n = len(gt_DINO)
+    for i in range(n):
+        dino_emb_1 = gt_DINO[i]
+        for j in range((i+1), n):
+            dino_emb_2 = gt_DINO[j]
+            dino_sim = dino_score(dino_emb_1, dino_emb_2)
+            dino_scores.append(dino_sim)
+
+    dinos = torch.tensor(dino_scores)
+    gt_dino_mean = dinos.mean()
+
+    print(f'The mean DINO similarity of {n} gt images is: {gt_dino_mean}')
+
 lat_rep = torch.load(lat_rep_path)
 lat_rep = [tensor.to(device) for tensor in lat_rep]
 
-image_pil = Image.open(gt_image_path)
-image_pil_rgb = image_pil.convert('RGB')
-image_numpy = np.array(image_pil_rgb)
-image = torch.tensor(image_numpy/255)
-
 with torch.no_grad():
-    get_scores(lat_rep, prompt, image)
+    get_scores(lat_rep, prompt, gt_image_paths)
