@@ -6,26 +6,30 @@ from PIL import Image
 from transformers import AutoImageProcessor, AutoModel
 from facenet_pytorch import MTCNN, InceptionResnetV1
 import pandas as pd
+import pickle
+import os
 
 from utils.pipeline import get_image_clip_embedding, get_text_clip_embedding, clip_score
 device = "cuda"
+
+dataset_path = "../datasets/celebs/"
 
 DINO_processor = AutoImageProcessor.from_pretrained('facebook/dinov2-base')
 DINO_model = AutoModel.from_pretrained('facebook/dinov2-base').to(device)
 mtcnn = MTCNN(select_largest=True, device='cpu')
 facenet = InceptionResnetV1(pretrained='vggface2').eval()
 
-embeddings = torchvision.datasets.ImageFolder("../datasets/celebs", transform=lambda x: facenet(mtcnn(x).unsqueeze(0)))
+embeddings = torchvision.datasets.ImageFolder(dataset_path, transform=lambda x: facenet(mtcnn(x).unsqueeze(0)))
 embeddings.idx_to_class = {i:c for c, i in embeddings.class_to_idx.items()}
 loader = torch.utils.data.DataLoader(embeddings)
 
 ####################### TOUCH ZONE #######################
 
-lat_rep_path = '../notebooks/lat_rep_Audrey_Hepburn_1.pt'
-prompt ='Audrey Hepburn'
-gt_image_paths = ['../celebs/Audrey_Hepburn_1.png',
-                  '../celebs/Audrey_Hepburn_2.png',
-                  '../celebs/Audrey_Hepburn_3.png'] # square png image
+#lat_rep_path = './latents/color/ours_Chris_Rock_0'
+#prompt ='Chris Rock'
+#gt_image_paths = [f'./datasets/celebs/{prompt}/0.jpeg',
+#                  f'./datasets/celebs/{prompt}/1.jpg',
+#                  f'./datasets/celebs/{prompt}/2.jpg'] # square png image
 
 ##########################################################
 
@@ -118,13 +122,24 @@ def get_facenet_distance_to_ds(lat_rep_render, prompt):
         names.append(embeddings.idx_to_class[int(y[0])])
         distances.append((lat_embedding - x).norm().detach().cpu())
     
-    scores = pd.Series(distances, index=names).groupby(names).mean()
+    scores = pd.Series(distances, index=names)
     prompt_score = scores[prompt].mean()
     others_score = scores.drop(prompt).mean()
         
-    return scores, prompt_score, others_score
+    return scores.groupby(names).mean(), prompt_score, others_score
 
-def get_scores(lat_rep, prompt, gt_image_paths):
+# e.g. "Thomas Mueller": lat_rep
+def get_scores_for_dict(lat_dict: dict):
+    result_dict = {}
+    for name in  lat_dict.keys():
+        lat_rep = lat_dict[name]
+        with torch.no_grad():
+            scores = get_scores(lat_rep, name)
+        result_dict[name] = scores
+    return result_dict
+
+def get_scores(lat_rep, prompt):
+    lat_rep = [tensor.to(device) for tensor in lat_rep]
 
     normalized_CLIP_embedding_text = get_text_clip_embedding(prompt)
 
@@ -151,7 +166,10 @@ def get_scores(lat_rep, prompt, gt_image_paths):
     DINO_front_no_c = []
     DINO_side_no_c = []
 
-    for image_path in gt_image_paths:
+    prompt_path = dataset_path + prompt
+    for filename in os.listdir(prompt_path):
+        image_path = os.path.join(prompt_path, filename)
+        
         image_pil = Image.open(image_path)
         image_pil_rgb = image_pil.convert('RGB')
         image_numpy = np.array(image_pil_rgb)
@@ -217,8 +235,9 @@ def get_scores(lat_rep, prompt, gt_image_paths):
     print(f"mean Facenet distance to rest: {facenet_rest_score}")
     print(f"mean Facenet distance to all: {facenet_all_scores}")
 
-lat_rep = torch.load(lat_rep_path)
-lat_rep = [tensor.to(device) for tensor in lat_rep]
+#lat_rep = torch.load(lat_rep_path)
+#lat_rep = pickle.load(open(lat_rep_path, "rb"))
+#lat_rep = [tensor.to(device) for tensor in lat_rep]
 
-with torch.no_grad():
-    get_scores(lat_rep, prompt, gt_image_paths)
+#with torch.no_grad():
+#    get_scores(lat_rep, prompt, gt_image_paths)
