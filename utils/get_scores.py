@@ -138,7 +138,7 @@ def get_scores(lat_rep, prompt, gt_image_paths):
     CLIP_score_front_no_c = clip_score(normalized_CLIP_embedding_image_front_no_c, normalized_CLIP_embedding_text)
     CLIP_score_side_no_c = clip_score(normalized_CLIP_embedding_image_side_no_c, normalized_CLIP_embedding_text)
     
-    get_facenet_distance_to_ds(image_front_c)
+    facenet_all_scores, facenet_prompt_score, facenet_rest_score = get_facenet_distance_to_ds(image_front_c, prompt)
 
     normalized_DINO_embedding_image_front_c = get_image_DINO_embedding(image_front_c)
     normalized_DINO_embedding_image_side_c = get_image_DINO_embedding(image_side_c)
@@ -213,6 +213,9 @@ def get_scores(lat_rep, prompt, gt_image_paths):
     gt_dino_mean = dinos.mean()
 
     print(f'The mean DINO similarity of {n} gt images is: {gt_dino_mean}')
+    print(f"mean Facenet distance to ground truth: {facenet_prompt_score}")
+    print(f"mean Facenet distance to rest: {facenet_rest_score}")
+    print(f"mean Facenet distance to all: {facenet_all_scores}")
 
 lat_rep = torch.load(lat_rep_path)
 lat_rep = [tensor.to(device) for tensor in lat_rep]
