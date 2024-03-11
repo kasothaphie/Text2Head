@@ -1,8 +1,10 @@
 import torch
+import torchvision
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 from transformers import AutoImageProcessor, AutoModel
+from facenet_pytorch import MTCNN, InceptionResnetV1
 import pandas as pd
 
 from utils.pipeline import get_image_clip_embedding, get_text_clip_embedding, clip_score
@@ -10,6 +12,12 @@ device = "cuda"
 
 DINO_processor = AutoImageProcessor.from_pretrained('facebook/dinov2-base')
 DINO_model = AutoModel.from_pretrained('facebook/dinov2-base').to(device)
+mtcnn = MTCNN(select_largest=True, device='cpu')
+facenet = InceptionResnetV1(pretrained='vggface2').eval()
+
+embeddings = torchvision.datasets.ImageFolder("../datasets/celebs", transform=lambda x: facenet(mtcnn(x).unsqueeze(0)))
+embeddings.idx_to_class = {i:c for c, i in embeddings.class_to_idx.items()}
+loader = torch.utils.data.DataLoader(embeddings)
 
 ####################### TOUCH ZONE #######################
 
@@ -100,6 +108,22 @@ def dino_score(DINO_embedding, gt_embedding):
     DINO_similarity = 100 * torch.matmul(DINO_embedding, gt_embedding.T)
     return DINO_similarity
 
+def get_facenet_distance_to_ds(lat_rep_render, prompt):
+    lat_cropped = mtcnn(torchvision.transforms.functional.to_pil_image(lat_rep_render.permute(2, 0, 1)))
+    lat_embedding = facenet(lat_cropped.unsqueeze(0)) 
+    
+    names = []
+    distances = []
+    for x, y in loader:
+        names.append(embeddings.idx_to_class[int(y[0])])
+        distances.append((lat_embedding - x).norm().detach().cpu())
+    
+    scores = pd.Series(distances, index=names).groupby(names).mean()
+    prompt_score = scores[prompt].mean()
+    others_score = scores.drop(prompt).mean()
+        
+    return scores, prompt_score, others_score
+
 def get_scores(lat_rep, prompt, gt_image_paths):
 
     normalized_CLIP_embedding_text = get_text_clip_embedding(prompt)
@@ -113,6 +137,8 @@ def get_scores(lat_rep, prompt, gt_image_paths):
     CLIP_score_side_c = clip_score(normalized_CLIP_embedding_image_side_c, normalized_CLIP_embedding_text)
     CLIP_score_front_no_c = clip_score(normalized_CLIP_embedding_image_front_no_c, normalized_CLIP_embedding_text)
     CLIP_score_side_no_c = clip_score(normalized_CLIP_embedding_image_side_no_c, normalized_CLIP_embedding_text)
+    
+    get_facenet_distance_to_ds(image_front_c)
 
     normalized_DINO_embedding_image_front_c = get_image_DINO_embedding(image_front_c)
     normalized_DINO_embedding_image_side_c = get_image_DINO_embedding(image_side_c)

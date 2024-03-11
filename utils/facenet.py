@@ -45,7 +45,7 @@ light_params_color = {
             "light_pos_p": torch.tensor([0.17, 2.77, -2.25])
     }
 
-def get_facenet_distance_to_ds(lat_rep):
+def get_facenet_distance_to_ds(lat_rep, prompt):
     lat_rep = [lat.cuda() for lat in lat_rep]
     with torch.no_grad():
         lat_rep_render = forward(lat_rep, "", camera_params_front, phong_params_color, light_params_color, False, True)[4]
@@ -58,5 +58,9 @@ def get_facenet_distance_to_ds(lat_rep):
     for x, y in loader:
         names.append(embeddings.idx_to_class[int(y[0])])
         distances.append((lat_embedding - x).norm().detach().cpu())
+    
+    scores = pd.Series(distances, index=names).groupby(names).mean()
+    prompt_score = scores[prompt].mean()
+    others_score = scores.drop(prompt).mean()
         
-    return pd.Series(distances, index=names)
+    return scores, prompt_score, others_score
