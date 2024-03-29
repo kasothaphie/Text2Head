@@ -1,10 +1,10 @@
-# Text2Head -- CLIP-guided Latent Code Optimization
+# Text2Head — CLIP-guided Latent Code Optimization
 tbd
 [Paper](tbd) | [arXiv](tbd)
 
 ![heads](https://github.com/kasothaphie/Text2Head/blob/mono_nphm_AdamW/extra/heads.png)
 
-This repository contains the source code for the paper **Text2Head -- CLIP-guided Latent Code Optimization**.
+This repository contains the source code for the paper **Text2Head — CLIP-guided Latent Code Optimization**.
 
 ## Abstract
 We propose Text2Head, a novel method for generating neural parametric 3D head models driven by text descriptions. Our approach takes textual prompts describing a person and outputs latent codes for geometry and appearance, which are then used to generate textured 3D head geometries with a pre-trained Monocular Parametric Head Model (MonoNPHM). In contrast to existing approaches, we do not require the prior generation of ground truth pairs of text prompts and latent codes, which can be limited in quality and availability. Instead, our method allows direct optimization of latent codes leveraging a CLIP loss. Our method demonstrates the capability to faithfully generate 3D head models for various applications.
