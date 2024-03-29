@@ -28,7 +28,7 @@ pip install -r requirements.txt
 ```
 
 ## Usage
-`notebooks/XXX.ipynb` provides a script for generating scenes using the trained denoising network.
+`notebooks/monoNPHM_test.ipynb` provides a script for generating scenes using the trained denoising network.
 
 ## Results
 The figure below provides the results for given input text prompts.
