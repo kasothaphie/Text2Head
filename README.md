@@ -34,7 +34,7 @@ pip install -r requirements.txt
 The figure below provides the results for given input text prompts.
 ![results](https://github.com/kasothaphie/Text2Head/blob/mono_nphm_AdamW/extra/qualitative.png)
 
-## Acknowledement
+## Acknowledgement
 This work is developed with [TUM Visual Computing Group](http://niessnerlab.org) led by [Prof. Matthias Niessner](https://niessnerlab.org/members/matthias_niessner/profile.html). We thank Matthias for his great support and supervision.
 Our work builds upon [MonoNPHM](https://arxiv.org/abs/2312.06740) by [Simon Giebenhain](https://simongiebenhain.github.io).
 
