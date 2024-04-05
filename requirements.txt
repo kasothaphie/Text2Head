@@ -1,6 +1,10 @@
 ipykernel
 pandas
 torch
+pytorch3d
+matplotlib
+multiprocess
+numpy
 torchvision
 torchaudio==2.0.2
 tensorboard
@@ -17,9 +21,9 @@ pyg_lib
 torch_scatter 
 torch_sparse 
 torch_cluster 
-torch_spline_conv 
+torch_spline_conv
+facenet-pytorch
 -f https://data.pyg.org/whl/torch-2.0.0+cu117.html
 clip @ git+https://github.com/openai/CLIP.git
--e ./NPHM
 -e ./MonoNPHM
 -e .

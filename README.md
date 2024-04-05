@@ -17,6 +17,9 @@ We propose Text2Head, a novel method for generating neural parametric 3D head mo
 - [Citation](#citation)
 
 ## Setup
+The full Setup is not possible at the moment, as the project is heavily based on on MonoNPHM which is not public yet.
+For the rest follow this tutorial.
+
 Create an environment via 
 ```
 conda create -n "Text2Head" python=3.9
@@ -26,6 +29,8 @@ and install everything required with
 ```
 pip install -r requirements.txt
 ```
+
+Once MonoNPHM is public to follow their instructions to load weights and install all necessary packages.
 
 ## Usage
 `notebooks/usage.ipynb` provides a script for generating scenes using the trained denoising network.

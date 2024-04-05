@@ -2,15 +2,9 @@ import yaml
 import torch
 import sys
 import json
-from torch.optim import Adam
-from torchvision.transforms import Compose, Normalize, Resize, CenterCrop, InterpolationMode, GaussianBlur
-from torch.nn.utils import clip_grad_value_, clip_grad_norm_
-import numpy as np
+from torchvision.transforms import Compose, Normalize, Resize, CenterCrop, InterpolationMode
 import clip
-#import open_clip
 import os.path as osp
-from NPHM.models.EnsembledDeepSDF import FastEnsembleDeepSDFMirrored
-from NPHM import env_paths
 import matplotlib.pyplot as plt
 from torch.utils.tensorboard import SummaryWriter
 from datetime import datetime
@@ -20,12 +14,8 @@ from nphm_tum import env_paths as mono_env_paths
 from nphm_tum.models.neural3dmm import construct_n3dmm, load_checkpoint
 from nphm_tum.models.canonical_space import get_id_model
 
-from torch.profiler import profile, record_function, ProfilerActivity
-
 from utils.render import render
 from utils.similarity import CLIP_similarity, DINO_similarity
-from utils.EMA import EMA
-
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -625,15 +615,6 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     best_clip_score = torch.tensor([-torch.inf]).cpu()
     torch.cuda.empty_cache()
     optimizer_geo_exp.zero_grad()
-    
-    #prof = profile(
-        #schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
-    #    on_trace_ready=torch.profiler.tensorboard_trace_handler('../runs/profile/memory'),
-    #    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-    #    record_shapes=True,
-    #    profile_memory=True,
-    #    use_cuda=True,
-    #    with_stack=True)
             
     lat_rep = [
         lat_geo if 'geo' in opt_vars else geo_mean,
@@ -644,9 +625,8 @@ def get_latent_from_text(prompt, hparams, init_lat=None, CLIP_gt=None, DINO_gt=N
     step_geo = torch.zeros_like(geo_mean)
     step_exp = torch.zeros_like(exp_mean)
     step_app = torch.zeros_like(app_mean)
-    #prof.start()
+
     for iteration in tqdm(range(hparams['n_iterations'])):
-    #prof.step()
         hparams["iteration"] = iteration
         
         lat_geo_old = torch.clone(lat_rep[0]).detach().cpu()

@@ -7,13 +7,8 @@ import optuna
 from nphm_tum import env_paths as mono_env_paths
 from nphm_tum.models.neural3dmm import construct_n3dmm, load_checkpoint
 
-from NPHM import env_paths
-from NPHM.models.EnsembledDeepSDF import FastEnsembleDeepSDFMirrored
 
-import numpy as np
-
-from utils.render import render
-from utils.pipeline import forward, get_latent_from_text
+from utils.pipeline import forward
 
 device = "cuda"
 
