@@ -1,6 +1,5 @@
 # Text2Head — CLIP-guided Latent Code Optimization
-tbd
-[Paper](tbd) | [arXiv](tbd)
+[Paper](./extra/report.pdf)
 
 ![heads](https://github.com/kasothaphie/Text2Head/blob/mono_nphm_AdamW/extra/heads.png)
 
