@@ -13,7 +13,6 @@ We propose Text2Head, a novel method for generating neural parametric 3D head mo
 - [Usage](#usage)
 - [Results](#results)
 - [Acknowledgement](#acknowledgement)
-- [Citation](#citation)
 
 ## Setup
 The full Setup is not possible at the moment, as the project is heavily based on on MonoNPHM which is not public yet.
@@ -41,8 +40,3 @@ The figure below provides the results for given input text prompts.
 ## Acknowledgement
 This work is developed with [TUM Visual Computing Group](http://niessnerlab.org) led by [Prof. Matthias Niessner](https://niessnerlab.org/members/matthias_niessner/profile.html). We thank Matthias for his great support and supervision.
 Our work builds upon [MonoNPHM](https://arxiv.org/abs/2312.06740) by [Simon Giebenhain](https://simongiebenhain.github.io).
-
-## Citation
-If you find this work useful please cite:
-
-tbd
